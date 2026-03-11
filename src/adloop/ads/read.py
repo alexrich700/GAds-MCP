@@ -181,6 +181,36 @@ def get_search_terms(
     return {"search_terms": rows, "total_search_terms": len(rows)}
 
 
+def get_negative_keywords(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """List negative keywords for a campaign or all campaigns."""
+    from adloop.ads.gaql import execute_query
+
+    campaign_filter = ""
+    if campaign_id:
+        campaign_filter = f"AND campaign.id = {campaign_id}"
+
+    query = f"""
+        SELECT campaign.id, campaign.name,
+               campaign_criterion.keyword.text,
+               campaign_criterion.keyword.match_type,
+               campaign_criterion.negative,
+               campaign_criterion.criterion_id
+        FROM campaign_criterion
+        WHERE campaign_criterion.negative = TRUE
+          AND campaign_criterion.status != 'REMOVED'
+          {campaign_filter}
+        ORDER BY campaign.name
+    """
+
+    rows = execute_query(config, customer_id, query)
+    return {"negative_keywords": rows, "total_negative_keywords": len(rows)}
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

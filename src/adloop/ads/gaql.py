@@ -49,7 +49,7 @@ def run_gaql(
     try:
         rows = execute_query(config, customer_id, query)
     except Exception as e:
-        return {"error": str(e), "query": query}
+        return {"error": _parse_gaql_error(e), "query": query}
 
     if format == "table":
         return _format_table(rows, query)
@@ -61,6 +61,32 @@ def run_gaql(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+_GAQL_ERROR_HINTS = {
+    "EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE": (
+        "Fields used in ORDER BY or HAVING must also appear in the SELECT clause. "
+        "Add the missing field to your SELECT."
+    ),
+    "UNRECOGNIZED_FIELD": "Check the field name — it may be misspelled or not available on this resource.",
+    "INVALID_RESOURCE_NAME": "The resource name in FROM is invalid. Check GAQL resource names.",
+    "PROHIBITED_FIELD_COMBINATION": (
+        "Some fields can't be selected together. Metrics and certain resource fields "
+        "may conflict. Try splitting into separate queries."
+    ),
+    "QUERY_NOT_ALLOWED": "This query type is not supported for this resource or access level.",
+    "INVALID_ARGUMENT": "Check your WHERE clause values — date formats, status strings, and IDs must be valid.",
+}
+
+
+def _parse_gaql_error(exc: Exception) -> str:
+    """Extract a human-readable message from Google Ads gRPC errors."""
+    raw = str(exc)
+    for code, hint in _GAQL_ERROR_HINTS.items():
+        if code in raw:
+            return f"{code}: {hint}"
+    if len(raw) > 500:
+        return raw[:500] + "..."
+    return raw
 
 
 def _parse_select_fields(query: str) -> list[str]:

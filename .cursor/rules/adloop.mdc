@@ -10,6 +10,14 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 
 ## Tool Inventory
 
+### Diagnostics
+
+| Tool | When to Use | Key Parameters |
+|------|-------------|----------------|
+| `health_check` | First thing to run when tools are failing — tests OAuth token, GA4, and Ads connectivity | (none) |
+
+**If health_check reports auth errors:** Tell the user to delete `~/.adloop/token.json` and re-run any tool to trigger re-authorization. If tokens keep expiring weekly, the GCP consent screen needs to be published from "Testing" to "In production".
+
 ### GA4 Read Tools
 
 | Tool | When to Use | Key Parameters |
@@ -28,6 +36,7 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 | `get_ad_performance` | Ad copy analysis — which headlines/descriptions work | `date_range_start`, `date_range_end` |
 | `get_keyword_performance` | Keyword analysis — quality scores, competitive metrics | `date_range_start`, `date_range_end` |
 | `get_search_terms` | Find negative keyword opportunities and understand user intent | `date_range_start`, `date_range_end` |
+| `get_negative_keywords` | List existing negative keywords for a campaign or all campaigns | `campaign_id` (optional) |
 | `run_gaql` | Custom queries not covered by other tools | `query`, `format` (table/json/csv) |
 
 **Return format notes:**
@@ -74,6 +83,14 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 
 6. **Never guess entity IDs.** Always retrieve IDs from a read tool first (`get_campaign_performance` for campaign IDs, `get_ad_performance` for ad IDs, etc.) before passing them to write tools.
 
+7. **NEVER add BROAD match keywords without verifying Smart Bidding.** Before calling `draft_keywords` with BROAD match, ALWAYS check the campaign's bidding strategy via `get_campaign_performance` or `run_gaql`. If the campaign uses MANUAL_CPC, MANUAL_CPM, or any non-Smart Bidding strategy, REFUSE to add BROAD match keywords. Use PHRASE or EXACT instead. The `draft_keywords` tool will also return a warning, but you must catch this BEFORE drafting. Broad Match + Manual CPC is the single most common cause of wasted ad spend.
+
+8. **Pre-write validation: check before you change.** Before ANY write operation, verify the campaign/ad group context is sound:
+   - Check bidding strategy (rule 7)
+   - Check if conversion tracking is active (zero conversions + high spend = problem to fix first, not more ads to create)
+   - Check quality scores (if all keywords have QS < 5, the problem is landing page/relevance, not keyword count)
+   - If the account has systemic issues, WARN the user before making changes that won't help. Adding more keywords to a campaign with zero conversions and quality score 0 makes things worse, not better.
+
 ## GDPR Consent & Data Discrepancies
 
 Most websites (especially in the EU) use a GDPR cookie consent banner. This has a critical impact on data interpretation:
@@ -113,12 +130,29 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 ### When user wants to create an ad
 
 1. Call `get_campaign_performance` to understand existing campaign structure and find the right `campaign.id`
-2. Use `run_gaql` to find ad group IDs: `SELECT ad_group.id, ad_group.name FROM ad_group WHERE campaign.id = {campaign_id}`
-3. Call `get_tracking_events` to verify conversion tracking exists
-4. If codebase is accessible, read the landing page code to extract value propositions
-5. Call `draft_responsive_search_ad` with at least 8-10 diverse headlines and 3-4 descriptions
-6. Present the complete preview to the user
-7. Wait for explicit user approval before calling `confirm_and_apply`
+2. **Pre-write checks (CRITICAL):**
+   - Is the target campaign's bidding strategy appropriate? MANUAL_CPC campaigns should NOT get more ads before fixing bidding.
+   - Does the campaign have any conversions? If it has significant spend and zero conversions, WARN the user that adding ads won't help — conversion tracking and campaign setup need fixing first.
+   - What are the quality scores? If all keywords are below 5, improving ad relevance and landing pages matters more than new ads.
+3. Use `run_gaql` to find ad group IDs: `SELECT ad_group.id, ad_group.name FROM ad_group WHERE campaign.id = {campaign_id}`
+4. Call `get_tracking_events` to verify conversion tracking exists
+5. If codebase is accessible, read the landing page code to extract value propositions and determine the language
+6. Call `draft_responsive_search_ad` with at least 8-10 diverse headlines and 3-4 descriptions. Write copy in the correct language — if the landing page is multilingual or the language is unclear, ask the user before writing. Follow the "Ad Copy Character Limits" section — count characters for every headline before generating
+7. Present the complete preview to the user — include any warnings from the pre-write checks
+8. Wait for explicit user approval before calling `confirm_and_apply`
+
+### When user wants to add keywords
+
+1. Call `get_campaign_performance` to identify the target campaign and its **bidding strategy**
+2. **Pre-write checks (CRITICAL):**
+   - If the campaign uses MANUAL_CPC/MANUAL_CPM: ONLY use EXACT or PHRASE match. NEVER propose BROAD match. Explain why.
+   - If the campaign has zero conversions: WARN that adding keywords won't help until conversion tracking is working.
+   - If all existing keywords have quality score < 5: WARN that the problem is ad relevance and landing pages, not keyword coverage.
+3. Call `get_keyword_performance` to see what keywords already exist — avoid duplicates
+4. Call `get_search_terms` to understand what's already triggering ads
+5. Call `draft_keywords` with appropriate match types (the tool will also warn about BROAD + non-Smart Bidding)
+6. Present the preview with any warnings
+7. Wait for explicit user approval
 
 ### When user asks about tracking or event issues
 
@@ -131,10 +165,11 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 ### When user asks to add negative keywords
 
 1. Call `get_search_terms` to see current search term data
-2. Identify irrelevant terms that waste budget — group them by theme
-3. Call `get_campaign_performance` to get the right `campaign.id`
-4. Call `add_negative_keywords` with the proposed list and the campaign ID
-5. Present preview and wait for confirmation
+2. Call `get_negative_keywords` to see what's already blocked — avoid duplicates
+3. Identify irrelevant terms that waste budget — group them by theme
+4. Call `get_campaign_performance` to get the right `campaign.id`
+5. Call `add_negative_keywords` with the proposed list and the campaign ID
+6. Present preview and wait for confirmation
 
 ### When user asks to pause or enable something
 
@@ -225,6 +260,7 @@ WHERE segments.date BETWEEN '2026-01-01' AND '2026-01-31'
 ### Important GAQL Rules
 
 - You CANNOT use `SELECT *` — every field must be named explicitly
+- **Fields used in ORDER BY must appear in SELECT.** `ORDER BY metrics.cost_micros` will fail unless `metrics.cost_micros` is in your SELECT clause. This is the most common GAQL error.
 - Metrics fields cannot appear in WHERE clauses with resource fields in the same query (use HAVING for post-filtering or filter in application logic)
 - `cost_micros` values are in micros — divide by 1,000,000 for the actual currency amount. The dedicated read tools (get_campaign_performance, etc.) already compute `metrics.cost` and `metrics.cpa` for you. Only `run_gaql` returns raw micros.
 - When selecting `segments.date`, results are broken down by day
@@ -268,6 +304,25 @@ FROM ad_group
 WHERE campaign.id = 12345678
 ```
 
+## Ad Copy Character Limits
+
+Google Ads enforces hard character limits. The `draft_responsive_search_ad` tool will reject copy that exceeds them, but you must write copy that fits on the FIRST attempt — do not generate copy and hope it fits.
+
+**Hard limits:**
+- Headlines: **30 characters** max (including spaces)
+- Descriptions: **90 characters** max (including spaces)
+- Display path fields: **15 characters** each
+
+**30 characters is very short.** This is the most common source of rejected ad drafts. Many languages produce words and phrases that easily exceed 30 characters — German compound words, French/Spanish phrases with articles, etc. English is among the most compact languages for ad copy.
+
+**Rules for writing ad copy that fits:**
+1. **Count characters for every headline BEFORE calling the draft tool.** Every space, hyphen, accent, and punctuation mark counts as 1 character. If a headline is over 30, rewrite it shorter — don't submit it and hope.
+2. **Abbreviate long words.** If a domain term exceeds ~15 characters, abbreviate it or use a shorter synonym. Save long terminology for descriptions (90 char limit).
+3. **Use short action verbs and numbers.** Numbers, symbols, and abbreviations save space.
+4. **Put long phrases in descriptions, not headlines.** Headlines are for punchy hooks. Descriptions have 3x the space for detail.
+5. **Write in the correct language.** Check the landing page to determine the language. If the landing page is multilingual or the language is ambiguous, ASK the user which language the ad should be in before writing any copy.
+6. **Test each headline mentally:** if it's close to 30, it's probably over. Aim for 25 or fewer to leave margin.
+
 ## Marketing Best Practices
 
 When advising on Google Ads:
@@ -277,8 +332,8 @@ When advising on Google Ads:
 - **Budget sufficiency**: A campaign's daily budget should be at least 5x its target CPA to generate enough data for the algorithm.
 - **Learning phase**: Don't edit campaigns that are in an active learning phase (Google Ads shows "Learning" or "Learning (limited)" status). Wait until the learning phase completes before making changes.
 - **Negative keyword hygiene**: After reviewing search terms, always suggest adding irrelevant terms as negatives. Group them by theme.
-- **RSA best practices**: Provide at least 8-10 unique headlines (out of max 15) and 3-4 descriptions (out of max 4). Make headlines diverse — don't repeat the same message. Pin only when necessary.
+- **RSA best practices**: Provide at least 8-10 unique headlines (out of max 15) and 3-4 descriptions (out of max 4). Make headlines diverse — don't repeat the same message. Pin only when necessary. See "Ad Copy Character Limits" section below for language-specific guidance.
 - **Quality Score**: If keywords have quality score < 5, prioritize improving ad relevance and landing page experience over bid increases.
 - **Zero conversions**: When a campaign has spent significant budget with zero conversions, investigate (1) is GDPR consent reducing visible conversions? (2) is conversion tracking set up correctly in GA4? (3) is the landing page converting organic traffic? (4) are search terms relevant? Don't just increase budget.
-- **Manual CPC + Broad Match**: This combination is dangerous — Broad Match needs Smart Bidding to control which queries it matches. Flag this immediately.
+- **Manual CPC + Broad Match**: This combination is the #1 cause of wasted budget. Broad Match without Smart Bidding matches any vaguely related query — a niche industry keyword on BROAD will match generic, irrelevant, and competitor terms. NEVER create this combination. If it already exists, recommend switching to PHRASE/EXACT match or moving the campaign to Smart Bidding BEFORE any other changes.
 - **Clicks vs sessions gap**: Never report a clicks > sessions discrepancy as a tracking bug without first accounting for GDPR consent. In the EU, 30-70% of users may reject analytics cookies. This is normal, not broken.

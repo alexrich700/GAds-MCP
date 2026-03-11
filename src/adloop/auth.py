@@ -104,7 +104,21 @@ def _oauth_flow(config: AdLoopConfig) -> Credentials:
         return creds
 
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if "revoked" in err_str or "invalid_grant" in err_str:
+                token_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    "OAuth token has been revoked or expired. "
+                    "This typically happens when the Google Cloud consent screen "
+                    "is in 'Testing' mode (tokens expire after 7 days). "
+                    "Fix: (1) re-run any AdLoop tool to trigger re-authorization, "
+                    "(2) publish the consent screen to 'In production' in Google "
+                    "Cloud Console to prevent future expiry."
+                ) from exc
+            raise
     else:
         flow = InstalledAppFlow.from_client_secrets_file(
             str(creds_path), _ALL_SCOPES

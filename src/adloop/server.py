@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import functools
+from typing import Callable
+
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
@@ -22,12 +25,86 @@ mcp = FastMCP(
 
 _config = load_config()
 
+
+def _safe(fn: Callable) -> Callable:
+    """Wrap a tool function so exceptions return structured error dicts."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except RuntimeError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            err = str(e).lower()
+            if "invalid_grant" in err or "revoked" in err:
+                return {
+                    "error": "Authentication failed — OAuth token expired or revoked.",
+                    "hint": (
+                        "Delete ~/.adloop/token.json and re-run any tool to "
+                        "trigger re-authorization. If this keeps happening, "
+                        "publish the GCP consent screen to 'In production'."
+                    ),
+                }
+            return {"error": str(e), "tool": fn.__name__}
+
+    return wrapper
+
+# ---------------------------------------------------------------------------
+# Health Check
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def health_check() -> dict:
+    """Test AdLoop connectivity — checks OAuth token, GA4 API, and Google Ads API.
+
+    Run this first if other tools are failing. Returns status for each service
+    and actionable guidance if something is broken.
+    """
+    status = {"ga4": "unknown", "ads": "unknown", "config": "ok"}
+
+    try:
+        from adloop.ga4.reports import get_account_summaries as _ga4_test
+
+        result = _ga4_test(_config)
+        status["ga4"] = "ok"
+        status["ga4_properties"] = result.get("total_properties", 0)
+    except Exception as e:
+        status["ga4"] = "error"
+        status["ga4_error"] = str(e)
+
+    try:
+        from adloop.ads.read import list_accounts as _ads_test
+
+        result = _ads_test(_config)
+        status["ads"] = "ok"
+        status["ads_accounts"] = result.get("total_accounts", 0)
+    except Exception as e:
+        status["ads"] = "error"
+        status["ads_error"] = str(e)
+
+    if status["ga4"] == "error" or status["ads"] == "error":
+        any_error = status.get("ga4_error", "") + status.get("ads_error", "")
+        if "invalid_grant" in any_error.lower() or "revoked" in any_error.lower():
+            status["hint"] = (
+                "OAuth token expired or revoked. Delete ~/.adloop/token.json "
+                "and re-run health_check to trigger re-authorization. "
+                "To prevent recurring expiry, publish the GCP consent screen "
+                "from 'Testing' to 'In production'."
+            )
+
+    return status
+
+
 # ---------------------------------------------------------------------------
 # GA4 Read Tools
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
 def get_account_summaries() -> dict:
     """List all GA4 accounts and properties accessible by the authenticated user.
 
@@ -40,6 +117,7 @@ def get_account_summaries() -> dict:
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
 def run_ga4_report(
     dimensions: list[str] | None = None,
     metrics: list[str] | None = None,
@@ -70,6 +148,7 @@ def run_ga4_report(
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
 def run_realtime_report(
     dimensions: list[str] | None = None,
     metrics: list[str] | None = None,
@@ -92,6 +171,7 @@ def run_realtime_report(
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
 def get_tracking_events(
     date_range_start: str = "28daysAgo",
     date_range_end: str = "today",
@@ -118,6 +198,7 @@ def get_tracking_events(
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
 def list_accounts() -> dict:
     """List all accessible Google Ads accounts.
 
@@ -130,6 +211,7 @@ def list_accounts() -> dict:
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
 def get_campaign_performance(
     customer_id: str = "",
     date_range_start: str = "",
@@ -152,6 +234,7 @@ def get_campaign_performance(
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
 def get_ad_performance(
     customer_id: str = "",
     date_range_start: str = "",
@@ -173,6 +256,7 @@ def get_ad_performance(
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
 def get_keyword_performance(
     customer_id: str = "",
     date_range_start: str = "",
@@ -194,6 +278,7 @@ def get_keyword_performance(
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
 def get_search_terms(
     customer_id: str = "",
     date_range_start: str = "",
@@ -215,6 +300,27 @@ def get_search_terms(
 
 
 @mcp.tool(annotations=_READONLY)
+@_safe
+def get_negative_keywords(
+    customer_id: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """List existing negative keywords for a campaign or all campaigns.
+
+    Use this before adding negative keywords to check for duplicates.
+    If campaign_id is empty, returns negatives across all campaigns.
+    """
+    from adloop.ads.read import get_negative_keywords as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_id=campaign_id,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
 def run_gaql(
     query: str,
     customer_id: str = "",
@@ -243,6 +349,7 @@ def run_gaql(
 
 
 @mcp.tool(annotations=_WRITE)
+@_safe
 def draft_responsive_search_ad(
     ad_group_id: str,
     headlines: list[str],
@@ -272,6 +379,7 @@ def draft_responsive_search_ad(
 
 
 @mcp.tool(annotations=_WRITE)
+@_safe
 def draft_keywords(
     ad_group_id: str,
     keywords: list[dict],
@@ -293,6 +401,7 @@ def draft_keywords(
 
 
 @mcp.tool(annotations=_WRITE)
+@_safe
 def add_negative_keywords(
     campaign_id: str,
     keywords: list[str],
@@ -317,6 +426,7 @@ def add_negative_keywords(
 
 
 @mcp.tool(annotations=_WRITE)
+@_safe
 def pause_entity(
     entity_type: str,
     entity_id: str,
@@ -344,6 +454,7 @@ def pause_entity(
 
 
 @mcp.tool(annotations=_WRITE)
+@_safe
 def enable_entity(
     entity_type: str,
     entity_id: str,
@@ -371,6 +482,7 @@ def enable_entity(
 
 
 @mcp.tool(annotations=_DESTRUCTIVE)
+@_safe
 def remove_entity(
     entity_type: str,
     entity_id: str,
@@ -398,6 +510,7 @@ def remove_entity(
 
 
 @mcp.tool(annotations=_DESTRUCTIVE)
+@_safe
 def confirm_and_apply(
     plan_id: str,
     dry_run: bool = True,

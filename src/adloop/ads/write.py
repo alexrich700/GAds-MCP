@@ -44,6 +44,18 @@ def draft_responsive_search_ad(
     if errors:
         return {"error": "Validation failed", "details": errors}
 
+    warnings = []
+    if len(headlines) < 8:
+        warnings.append(
+            f"Only {len(headlines)} headlines provided. Google recommends 8-15 "
+            "diverse headlines for optimal RSA performance."
+        )
+    if len(descriptions) < 3:
+        warnings.append(
+            f"Only {len(descriptions)} descriptions provided. Google recommends "
+            "3-4 descriptions for optimal RSA performance."
+        )
+
     plan = ChangePlan(
         operation="create_responsive_search_ad",
         entity_type="ad",
@@ -58,7 +70,10 @@ def draft_responsive_search_ad(
         },
     )
     store_plan(plan)
-    return plan.to_preview()
+    preview = plan.to_preview()
+    if warnings:
+        preview["warnings"] = warnings
+    return preview
 
 
 def draft_keywords(
@@ -83,6 +98,8 @@ def draft_keywords(
     if errors:
         return {"error": "Validation failed", "details": errors}
 
+    warnings = _check_broad_match_safety(config, customer_id, ad_group_id, keywords)
+
     plan = ChangePlan(
         operation="add_keywords",
         entity_type="keyword",
@@ -93,7 +110,10 @@ def draft_keywords(
         },
     )
     store_plan(plan)
-    return plan.to_preview()
+    preview = plan.to_preview()
+    if warnings:
+        preview["warnings"] = warnings
+    return preview
 
 
 def add_negative_keywords(
@@ -304,6 +324,56 @@ def confirm_and_apply(
 _VALID_MATCH_TYPES = {"EXACT", "PHRASE", "BROAD"}
 _VALID_ENTITY_TYPES = {"campaign", "ad_group", "ad", "keyword"}
 _REMOVABLE_ENTITY_TYPES = _VALID_ENTITY_TYPES | {"negative_keyword"}
+
+_SMART_BIDDING_STRATEGIES = {
+    "MAXIMIZE_CONVERSIONS",
+    "MAXIMIZE_CONVERSION_VALUE",
+    "TARGET_CPA",
+    "TARGET_ROAS",
+}
+
+
+def _check_broad_match_safety(
+    config: AdLoopConfig,
+    customer_id: str,
+    ad_group_id: str,
+    keywords: list[dict],
+) -> list[str]:
+    """Warn if BROAD match keywords are being added to a non-Smart Bidding campaign."""
+    has_broad = any(
+        kw.get("match_type", "").upper() == "BROAD" for kw in keywords
+    )
+    if not has_broad:
+        return []
+
+    try:
+        from adloop.ads.gaql import execute_query
+
+        query = f"""
+            SELECT campaign.bidding_strategy_type, campaign.name
+            FROM ad_group
+            WHERE ad_group.id = {ad_group_id}
+        """
+        rows = execute_query(config, customer_id, query)
+        if not rows:
+            return []
+
+        bidding = rows[0].get("campaign.bidding_strategy_type", "")
+        campaign_name = rows[0].get("campaign.name", "")
+
+        if bidding not in _SMART_BIDDING_STRATEGIES:
+            return [
+                f"DANGEROUS: Adding BROAD match keywords to campaign "
+                f"'{campaign_name}' which uses {bidding} bidding. "
+                f"Broad Match without Smart Bidding (tCPA/tROAS/Maximize Conversions) "
+                f"leads to irrelevant matches and wasted budget. "
+                f"Use PHRASE or EXACT match instead, or switch the campaign "
+                f"to Smart Bidding first."
+            ]
+    except Exception:
+        pass
+
+    return []
 
 
 def _validate_rsa(
