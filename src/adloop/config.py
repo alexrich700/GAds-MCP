@@ -20,6 +20,10 @@ class GoogleConfig:
 class GA4Config:
     property_id: str = ""
 
+    def __post_init__(self) -> None:
+        if self.property_id and not self.property_id.startswith("properties/"):
+            self.property_id = f"properties/{self.property_id}"
+
 
 @dataclass
 class AdsConfig:
