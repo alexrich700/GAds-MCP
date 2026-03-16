@@ -77,7 +77,8 @@ These tools call both APIs internally and return unified results with computed `
 
 | Tool | What It Does | Validation |
 |------|-------------|------------|
-| `draft_campaign` | Create full campaign structure preview (budget + campaign + ad group + optional keywords) | `campaign_name`, `daily_budget` (budget cap enforced), `bidding_strategy`, keywords validated for match type safety |
+| `draft_campaign` | Create full campaign structure (budget + campaign + ad group + keywords + geo/language targeting) | `campaign_name`, `daily_budget`, `bidding_strategy`, `geo_target_ids` (REQUIRED), `language_ids` (REQUIRED), keywords validated |
+| `update_campaign` | Modify existing campaign settings — bid strategy, budget, geo targets, language targets | `campaign_id` (REQUIRED), plus any of: `bidding_strategy`, `daily_budget`, `geo_target_ids`, `language_ids` |
 | `draft_responsive_search_ad` | Create RSA preview (does NOT publish) | 3-15 headlines (≤30 chars), 2-4 descriptions (≤90 chars), final_url required, path1/path2 (≤15 chars each) |
 | `draft_sitelinks` | Create sitelink extensions for a campaign (does NOT publish) | `campaign_id`, `sitelinks` list of {link_text ≤25 chars, final_url, description1 ≤35 chars, description2 ≤35 chars} |
 | `draft_keywords` | Propose keyword additions (does NOT add) | Each keyword needs `text` and `match_type` (EXACT/PHRASE/BROAD) |
@@ -95,7 +96,9 @@ These tools call both APIs internally and return unified results with computed `
 
 **Safety behaviors:**
 - New campaigns and RSAs are created as PAUSED — user must explicitly enable them after review.
+- `draft_campaign` REQUIRES `geo_target_ids` and `language_ids` — campaigns without targeting waste budget. The tool rejects drafts with missing targeting.
 - `draft_campaign` enforces the `max_daily_budget` safety cap, rejects BROAD match + non-Smart Bidding, and warns if budget is below 5x target CPA.
+- `update_campaign` replaces geo/language targets entirely (not append). Pass the full desired list.
 - `remove_entity` is IRREVERSIBLE — always prefer `pause_entity` unless the user explicitly wants permanent removal. Removal triggers double confirmation in the safety layer.
 - `remove_entity` supports `entity_type` values: "campaign", "ad_group", "ad", "keyword", "negative_keyword", "campaign_asset". Use "negative_keyword" to remove campaign-level negative keywords. Use "campaign_asset" to remove sitelinks and other asset links from a campaign.
 - `require_dry_run: true` in config overrides `dry_run=false` — the user must change the config to allow real mutations.
@@ -195,17 +198,34 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 1. Call `get_campaign_performance` to understand the existing campaign structure — avoid duplicate campaign names
 2. If the user hasn't specified a budget, call `estimate_budget` with proposed keywords to get a data-driven budget recommendation
 3. **Pre-write checks (CRITICAL):**
-   - Has the user specified a bidding strategy? If not, recommend MAXIMIZE_CONVERSIONS or TARGET_CPA over MANUAL_CPC. Never default to MANUAL_CPC.
+   - **Bidding strategy**: Default to MAXIMIZE_CONVERSIONS. It tells Google the goal is conversions (not just clicks), doesn't waste budget on non-converting clicks, and starts building the conversion model from day one — even with zero history, Google uses broad signals (search intent, device, time of day). Only use TARGET_SPEND/MANUAL_CPC if the user explicitly requests it and understands the trade-offs.
+   - **Geo targeting**: ALWAYS ask the user which countries/regions to target if not specified. Never create a campaign without geo targets — untargeted campaigns waste budget on irrelevant geographies. Common IDs: 2276=Germany, 2040=Austria, 2756=Switzerland, 2840=USA, 2826=UK.
+   - **Language targeting**: ALWAYS ask the user which languages to target if not specified. Language targeting restricts ads to users whose browser/Google language matches — without it, ads show to anyone in the geo region regardless of language. Common IDs: 1001=German, 1000=English, 1002=French.
    - Does the account have conversion tracking working? Call `attribution_check` — if zero conversions across the board, WARN that new campaigns won't help until tracking is fixed.
    - Is the proposed budget reasonable? Must be ≤ `max_daily_budget` in config, and ideally ≥ 5x target CPA.
-3. Call `draft_campaign` with campaign name, daily budget, bidding strategy, ad group name, and optional keywords
-4. Review the preview and any `warnings` (budget sufficiency, MANUAL_CPC warning, BROAD match rejection)
-5. Present the complete preview to the user — emphasize the campaign will be created as PAUSED
-6. After campaign creation, remind the user to:
+4. Call `draft_campaign` with campaign name, daily budget, bidding strategy, `geo_target_ids`, `language_ids`, ad group name, and optional keywords
+5. Review the preview and any `warnings` (budget sufficiency, MANUAL_CPC warning, BROAD match rejection)
+6. Present the complete preview to the user — emphasize the campaign will be created as PAUSED, and confirm the geo/language targets are correct
+7. After campaign creation, remind the user to:
    - Add ads via `draft_responsive_search_ad` (with display paths set)
    - Add sitelinks via `draft_sitelinks` (at least 4 recommended)
    - Enable the campaign via `enable_entity` only after ads and sitelinks are in place
-7. Wait for explicit user approval before calling `confirm_and_apply`
+8. Wait for explicit user approval before calling `confirm_and_apply`
+
+### When user wants to change campaign settings (bid strategy, targeting, budget)
+
+1. Call `get_campaign_performance` to identify the campaign and its current settings
+2. Use `run_gaql` to check current targeting:
+   - Geo: `SELECT campaign_criterion.location.geo_target_constant FROM campaign_criterion WHERE campaign.id = {id} AND campaign_criterion.type = 'LOCATION'`
+   - Language: `SELECT campaign_criterion.language.language_constant FROM campaign_criterion WHERE campaign.id = {id} AND campaign_criterion.type = 'LANGUAGE'`
+3. **Pre-write checks:**
+   - If changing to MAXIMIZE_CONVERSIONS: good default choice — confirm with the user
+   - If changing to MANUAL_CPC: warn about the trade-offs (no automation, requires constant monitoring)
+   - If removing geo or language targets: warn that this broadens targeting and may waste budget
+   - If the campaign is in a learning phase: warn that changes will restart the learning phase
+4. Call `update_campaign` with only the parameters that need to change
+5. Present the preview — clearly show what's changing (old → new)
+6. Wait for explicit user approval before calling `confirm_and_apply`
 
 ### When user asks "how much should I spend" or "what budget do I need"
 
@@ -408,10 +428,45 @@ Google Ads enforces hard character limits. The `draft_responsive_search_ad` tool
 5. **Write in the correct language.** Check the landing page to determine the language. If the landing page is multilingual or the language is ambiguous, ASK the user which language the ad should be in before writing any copy.
 6. **Test each headline mentally:** if it's close to 30, it's probably over. Aim for 25 or fewer to leave margin.
 
+## Geo & Language Targeting Reference
+
+### Common Geo Target IDs (geoTargetConstants)
+
+| ID | Country |
+|----|---------|
+| 2276 | Germany |
+| 2040 | Austria |
+| 2756 | Switzerland |
+| 2840 | United States |
+| 2826 | United Kingdom |
+| 2250 | France |
+| 2380 | Italy |
+| 2724 | Spain |
+| 2528 | Netherlands |
+| 2056 | Belgium |
+
+For cities/regions, use `run_gaql` with `geo_target_constant` resource or look up IDs in the Google Ads API Geo Target documentation.
+
+### Common Language IDs (languageConstants)
+
+| ID | Language |
+|----|----------|
+| 1000 | English |
+| 1001 | German |
+| 1002 | French |
+| 1003 | Italian |
+| 1004 | Spanish |
+| 1005 | Dutch |
+| 1009 | Portuguese |
+| 1014 | Polish |
+
 ## Marketing Best Practices
 
 When advising on Google Ads:
 
+- **Bid strategy default**: Prefer MAXIMIZE_CONVERSIONS for new campaigns. It leverages Google's signals from day one, even without conversion history. TARGET_SPEND (Maximize Clicks) only makes sense as a deliberate data-collection phase — and even then, MAXIMIZE_CONVERSIONS is usually better because it starts optimizing for conversions immediately instead of just accumulating clicks.
+- **Geo targeting is mandatory**: Every campaign must target specific countries/regions. Untargeted campaigns serve globally and waste budget. ALWAYS set geo_target_ids when creating campaigns.
+- **Language targeting is mandatory**: Every campaign must target specific languages. Without it, ads show to all users in the geo region regardless of browser language. A German-language ad shown to an English speaker in Germany wastes budget. ALWAYS set language_ids when creating campaigns.
 - **Match types**: Never recommend Broad Match without Smart Bidding (tCPA or tROAS) active on the campaign. Broad Match without Smart Bidding leads to budget waste.
 - **CPA monitoring**: Flag any campaign where CPA exceeds 3x the target for review.
 - **Budget sufficiency**: A campaign's daily budget should be at least 5x its target CPA to generate enough data for the algorithm.

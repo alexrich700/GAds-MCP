@@ -302,12 +302,19 @@ def draft_campaign(
     channel_type: str = "SEARCH",
     ad_group_name: str = "",
     keywords: list[dict] | None = None,
+    geo_target_ids: list[str] | None = None,
+    language_ids: list[str] | None = None,
 ) -> dict:
     """Draft a full campaign structure — returns preview, does NOT execute.
 
-    Creates: CampaignBudget + Campaign (PAUSED) + AdGroup + optional Keywords.
-    Ads are NOT included — use draft_responsive_search_ad separately after the
-    campaign exists.
+    Creates: CampaignBudget + Campaign (PAUSED) + AdGroup + optional Keywords
+    + geo targeting + language targeting.
+    Ads are NOT included — use draft_responsive_search_ad separately.
+
+    geo_target_ids: list of geo target constant IDs (e.g. ["2276"] for Germany,
+        ["2840"] for USA). REQUIRED — campaigns must target specific countries.
+    language_ids: list of language constant IDs (e.g. ["1001"] for German,
+        ["1000"] for English). REQUIRED — campaigns must target specific languages.
     """
     from adloop.safety.guards import (
         SafetyViolation,
@@ -330,6 +337,8 @@ def draft_campaign(
         target_roas=target_roas,
         channel_type=channel_type,
         keywords=keywords,
+        geo_target_ids=geo_target_ids,
+        language_ids=language_ids,
     )
     if errors:
         return {"error": "Validation failed", "details": errors}
@@ -352,7 +361,118 @@ def draft_campaign(
             "channel_type": channel_type.upper(),
             "ad_group_name": ad_group_name or campaign_name,
             "keywords": keywords,
+            "geo_target_ids": geo_target_ids or [],
+            "language_ids": language_ids or [],
         },
+    )
+    store_plan(plan)
+    preview = plan.to_preview()
+    if warnings:
+        preview["warnings"] = warnings
+    return preview
+
+
+def update_campaign(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    campaign_id: str = "",
+    bidding_strategy: str = "",
+    target_cpa: float = 0,
+    target_roas: float = 0,
+    daily_budget: float = 0,
+    geo_target_ids: list[str] | None = None,
+    language_ids: list[str] | None = None,
+) -> dict:
+    """Draft an update to an existing campaign — returns preview, does NOT execute.
+
+    All parameters except campaign_id are optional — only include what you want
+    to change. Geo/language targets are REPLACED entirely (not appended).
+    """
+    from adloop.safety.guards import (
+        SafetyViolation,
+        check_blocked_operation,
+        check_budget_cap,
+    )
+    from adloop.safety.preview import ChangePlan, store_plan
+
+    try:
+        check_blocked_operation("update_campaign", config.safety)
+    except SafetyViolation as e:
+        return {"error": str(e)}
+
+    errors = []
+    warnings = []
+
+    if not campaign_id:
+        errors.append("campaign_id is required")
+
+    bs = bidding_strategy.upper() if bidding_strategy else ""
+    if bs and bs not in _VALID_BIDDING_STRATEGIES:
+        errors.append(
+            f"bidding_strategy must be one of {sorted(_VALID_BIDDING_STRATEGIES)}, "
+            f"got '{bidding_strategy}'"
+        )
+    if bs == "TARGET_CPA" and not target_cpa:
+        errors.append("target_cpa is required when bidding_strategy is TARGET_CPA")
+    if bs == "TARGET_ROAS" and not target_roas:
+        errors.append("target_roas is required when bidding_strategy is TARGET_ROAS")
+
+    if daily_budget and daily_budget <= 0:
+        errors.append("daily_budget must be greater than 0")
+
+    if daily_budget:
+        try:
+            check_budget_cap(daily_budget, config.safety)
+        except SafetyViolation as e:
+            errors.append(str(e))
+
+    if geo_target_ids is not None and len(geo_target_ids) == 0:
+        errors.append("geo_target_ids cannot be empty — provide at least one geo target")
+    if language_ids is not None and len(language_ids) == 0:
+        errors.append("language_ids cannot be empty — provide at least one language")
+
+    has_any_change = any([
+        bs, daily_budget, geo_target_ids is not None, language_ids is not None,
+    ])
+    if not has_any_change:
+        errors.append("No changes specified — provide at least one parameter to update")
+
+    if errors:
+        return {"error": "Validation failed", "details": errors}
+
+    if bs == "MANUAL_CPC":
+        warnings.append(
+            "MANUAL_CPC bidding requires constant monitoring. Consider using "
+            "MAXIMIZE_CONVERSIONS or TARGET_CPA for automated optimization."
+        )
+
+    if daily_budget and target_cpa > 0 and daily_budget < 5 * target_cpa:
+        warnings.append(
+            f"Daily budget €{daily_budget:.2f} is less than 5x target CPA "
+            f"€{target_cpa:.2f}. Google recommends at least 5x."
+        )
+
+    changes: dict = {"campaign_id": campaign_id}
+    if bs:
+        changes["bidding_strategy"] = bs
+    if target_cpa:
+        changes["target_cpa"] = target_cpa
+    if target_roas:
+        changes["target_roas"] = target_roas
+    if daily_budget:
+        changes["daily_budget"] = daily_budget
+    if geo_target_ids is not None:
+        changes["geo_target_ids"] = geo_target_ids
+    if language_ids is not None:
+        changes["language_ids"] = language_ids
+
+    plan = ChangePlan(
+        operation="update_campaign",
+        entity_type="campaign",
+        entity_id=campaign_id,
+        customer_id=customer_id,
+        changes=changes,
     )
     store_plan(plan)
     preview = plan.to_preview()
@@ -663,6 +783,8 @@ def _validate_campaign(
     target_roas: float,
     channel_type: str,
     keywords: list[dict] | None,
+    geo_target_ids: list[str] | None,
+    language_ids: list[str] | None,
 ) -> tuple[list[str], list[str]]:
     """Validate campaign draft inputs. Returns (errors, warnings)."""
     errors = []
@@ -672,6 +794,16 @@ def _validate_campaign(
         errors.append("campaign_name is required")
     if daily_budget <= 0:
         errors.append("daily_budget must be greater than 0")
+    if not geo_target_ids:
+        errors.append(
+            "geo_target_ids is required — campaigns must target at least one "
+            "country/region (e.g. ['2276'] for Germany, ['2840'] for USA)"
+        )
+    if not language_ids:
+        errors.append(
+            "language_ids is required — campaigns must target at least one "
+            "language (e.g. ['1001'] for German, ['1000'] for English)"
+        )
 
     bs = bidding_strategy.upper()
     if bs not in _VALID_BIDDING_STRATEGIES:
@@ -797,6 +929,7 @@ def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
 
     dispatch = {
         "create_campaign": _apply_create_campaign,
+        "update_campaign": _apply_update_campaign,
         "create_responsive_search_ad": _apply_create_rsa,
         "add_keywords": _apply_add_keywords,
         "add_negative_keywords": _apply_add_negative_keywords,
@@ -915,9 +1048,32 @@ def _apply_create_campaign(client: object, cid: str, changes: dict) -> dict:
         )
         operations.append(kw_op)
 
+    # 5. Geo targeting (CampaignCriterion referencing campaign -2)
+    for geo_id in changes.get("geo_target_ids") or []:
+        geo_op = client.get_type("MutateOperation")
+        geo_criterion = geo_op.campaign_criterion_operation.create
+        geo_criterion.campaign = campaign_service.campaign_path(cid, "-2")
+        geo_criterion.location.geo_target_constant = (
+            f"geoTargetConstants/{geo_id}"
+        )
+        operations.append(geo_op)
+
+    # 6. Language targeting (CampaignCriterion referencing campaign -2)
+    for lang_id in changes.get("language_ids") or []:
+        lang_op = client.get_type("MutateOperation")
+        lang_criterion = lang_op.campaign_criterion_operation.create
+        lang_criterion.campaign = campaign_service.campaign_path(cid, "-2")
+        lang_criterion.language.language_constant = (
+            f"languageConstants/{lang_id}"
+        )
+        operations.append(lang_op)
+
     response = service.mutate(customer_id=cid, mutate_operations=operations)
 
     results = {}
+    num_keywords = len(kw_list)
+    num_geo = len(changes.get("geo_target_ids") or [])
+    num_lang = len(changes.get("language_ids") or [])
     for i, resp in enumerate(response.mutate_operation_responses):
         resp_type = resp.WhichOneof("response")
         if resp_type:
@@ -929,9 +1085,156 @@ def _apply_create_campaign(client: object, cid: str, changes: dict) -> dict:
                 results["campaign"] = resource
             elif i == 2:
                 results["ad_group"] = resource
-            else:
+            elif i < 3 + num_keywords:
                 results.setdefault("keywords", []).append(resource)
+            elif i < 3 + num_keywords + num_geo:
+                results.setdefault("geo_targets", []).append(resource)
+            else:
+                results.setdefault("language_targets", []).append(resource)
 
+    return results
+
+
+def _apply_update_campaign(client: object, cid: str, changes: dict) -> dict:
+    """Update an existing campaign's settings."""
+    from google.protobuf import field_mask_pb2
+
+    service = client.get_service("GoogleAdsService")
+    campaign_service = client.get_service("CampaignService")
+    operations = []
+    field_paths = []
+
+    campaign_id = changes["campaign_id"]
+    resource_name = campaign_service.campaign_path(cid, campaign_id)
+
+    # Bid strategy change
+    bs = changes.get("bidding_strategy")
+    if bs:
+        campaign_op = client.get_type("MutateOperation")
+        campaign = campaign_op.campaign_operation.update
+        campaign.resource_name = resource_name
+
+        if bs == "MAXIMIZE_CONVERSIONS":
+            campaign.maximize_conversions.target_cpa_micros = 0
+            if changes.get("target_cpa"):
+                campaign.maximize_conversions.target_cpa_micros = int(
+                    changes["target_cpa"] * 1_000_000
+                )
+            field_paths.append("maximize_conversions.target_cpa_micros")
+        elif bs == "TARGET_CPA":
+            campaign.maximize_conversions.target_cpa_micros = int(
+                changes["target_cpa"] * 1_000_000
+            )
+            field_paths.append("maximize_conversions.target_cpa_micros")
+        elif bs == "MAXIMIZE_CONVERSION_VALUE":
+            campaign.maximize_conversion_value.target_roas = 0
+            if changes.get("target_roas"):
+                campaign.maximize_conversion_value.target_roas = changes[
+                    "target_roas"
+                ]
+            field_paths.append("maximize_conversion_value.target_roas")
+        elif bs == "TARGET_ROAS":
+            campaign.maximize_conversion_value.target_roas = changes["target_roas"]
+            field_paths.append("maximize_conversion_value.target_roas")
+        elif bs == "TARGET_SPEND":
+            campaign.target_spend.target_spend_micros = 0
+            field_paths.append("target_spend.target_spend_micros")
+        elif bs == "MANUAL_CPC":
+            campaign.manual_cpc.enhanced_cpc_enabled = False
+            field_paths.append("manual_cpc.enhanced_cpc_enabled")
+
+        if field_paths:
+            campaign_op.campaign_operation.update_mask.CopyFrom(
+                field_mask_pb2.FieldMask(paths=field_paths)
+            )
+            operations.append(campaign_op)
+
+    # Budget change — requires finding the budget resource name first
+    new_budget = changes.get("daily_budget")
+    if new_budget:
+        budget_query = f"""
+            SELECT campaign.campaign_budget
+            FROM campaign
+            WHERE campaign.id = {campaign_id}
+        """
+        rows = list(service.search(customer_id=cid, query=budget_query))
+        if not rows:
+            raise ValueError(f"Campaign {campaign_id} not found")
+        budget_rn = rows[0].campaign.campaign_budget
+
+        budget_op = client.get_type("MutateOperation")
+        budget = budget_op.campaign_budget_operation.update
+        budget.resource_name = budget_rn
+        budget.amount_micros = int(new_budget * 1_000_000)
+        budget_op.campaign_budget_operation.update_mask.CopyFrom(
+            field_mask_pb2.FieldMask(paths=["amount_micros"])
+        )
+        operations.append(budget_op)
+
+    # Geo targeting — remove existing, add new
+    geo_ids = changes.get("geo_target_ids")
+    if geo_ids is not None:
+        existing_geo = f"""
+            SELECT campaign_criterion.resource_name
+            FROM campaign_criterion
+            WHERE campaign.id = {campaign_id}
+              AND campaign_criterion.type = 'LOCATION'
+        """
+        for row in service.search(customer_id=cid, query=existing_geo):
+            rm_op = client.get_type("MutateOperation")
+            rm_op.campaign_criterion_operation.remove = (
+                row.campaign_criterion.resource_name
+            )
+            operations.append(rm_op)
+
+        for geo_id in geo_ids:
+            add_op = client.get_type("MutateOperation")
+            criterion = add_op.campaign_criterion_operation.create
+            criterion.campaign = resource_name
+            criterion.location.geo_target_constant = (
+                f"geoTargetConstants/{geo_id}"
+            )
+            operations.append(add_op)
+
+    # Language targeting — remove existing, add new
+    lang_ids = changes.get("language_ids")
+    if lang_ids is not None:
+        existing_lang = f"""
+            SELECT campaign_criterion.resource_name
+            FROM campaign_criterion
+            WHERE campaign.id = {campaign_id}
+              AND campaign_criterion.type = 'LANGUAGE'
+        """
+        for row in service.search(customer_id=cid, query=existing_lang):
+            rm_op = client.get_type("MutateOperation")
+            rm_op.campaign_criterion_operation.remove = (
+                row.campaign_criterion.resource_name
+            )
+            operations.append(rm_op)
+
+        for lang_id in lang_ids:
+            add_op = client.get_type("MutateOperation")
+            criterion = add_op.campaign_criterion_operation.create
+            criterion.campaign = resource_name
+            criterion.language.language_constant = (
+                f"languageConstants/{lang_id}"
+            )
+            operations.append(add_op)
+
+    if not operations:
+        return {"message": "No changes to apply"}
+
+    response = service.mutate(customer_id=cid, mutate_operations=operations)
+
+    results = {"updated": []}
+    for resp in response.mutate_operation_responses:
+        rn = (
+            resp.campaign_result.resource_name
+            or resp.campaign_budget_result.resource_name
+            or resp.campaign_criterion_result.resource_name
+        )
+        if rn:
+            results["updated"].append(rn)
     return results
 
 

@@ -460,6 +460,8 @@ def draft_campaign(
     campaign_name: str,
     daily_budget: float,
     bidding_strategy: str,
+    geo_target_ids: list[str],
+    language_ids: list[str],
     customer_id: str = "",
     target_cpa: float = 0,
     target_roas: float = 0,
@@ -469,7 +471,8 @@ def draft_campaign(
 ) -> dict:
     """Draft a full campaign structure — returns a PREVIEW, does NOT create anything.
 
-    Creates: CampaignBudget + Campaign (PAUSED) + AdGroup + optional Keywords.
+    Creates: CampaignBudget + Campaign (PAUSED) + AdGroup + optional Keywords
+    + geo targeting + language targeting.
     Ads are NOT included — use draft_responsive_search_ad after the campaign exists.
 
     bidding_strategy: MAXIMIZE_CONVERSIONS | TARGET_CPA | TARGET_ROAS |
@@ -477,6 +480,12 @@ def draft_campaign(
     target_cpa: required if bidding_strategy is TARGET_CPA (in account currency)
     target_roas: required if bidding_strategy is TARGET_ROAS
     keywords: list of {"text": "keyword", "match_type": "EXACT|PHRASE|BROAD"}
+    geo_target_ids: REQUIRED list of geo target constant IDs
+        Common: "2276" Germany, "2040" Austria, "2756" Switzerland, "2840" USA,
+        "2826" UK, "2250" France. Full list: Google Ads API geo target constants.
+    language_ids: REQUIRED list of language constant IDs
+        Common: "1001" German, "1000" English, "1002" French, "1004" Spanish,
+        "1014" Portuguese. Full list: Google Ads API language constants.
 
     Call confirm_and_apply with the returned plan_id to execute.
     """
@@ -493,6 +502,52 @@ def draft_campaign(
         channel_type=channel_type,
         ad_group_name=ad_group_name,
         keywords=keywords,
+        geo_target_ids=geo_target_ids,
+        language_ids=language_ids,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
+def update_campaign(
+    campaign_id: str,
+    customer_id: str = "",
+    bidding_strategy: str = "",
+    target_cpa: float = 0,
+    target_roas: float = 0,
+    daily_budget: float = 0,
+    geo_target_ids: list[str] | None = None,
+    language_ids: list[str] | None = None,
+) -> dict:
+    """Draft an update to an existing campaign — returns a PREVIEW, does NOT apply.
+
+    Only include the parameters you want to change. Omit the rest.
+
+    campaign_id: the numeric ID of the campaign to update (required)
+    bidding_strategy: MAXIMIZE_CONVERSIONS | TARGET_CPA | TARGET_ROAS |
+                      MAXIMIZE_CONVERSION_VALUE | TARGET_SPEND | MANUAL_CPC
+    target_cpa: required if bidding_strategy is TARGET_CPA (in account currency)
+    target_roas: required if bidding_strategy is TARGET_ROAS
+    daily_budget: new daily budget in account currency
+    geo_target_ids: REPLACES all geo targets. Common IDs: "2276" Germany,
+        "2040" Austria, "2756" Switzerland, "2840" USA, "2826" UK
+    language_ids: REPLACES all language targets. Common IDs: "1001" German,
+        "1000" English, "1002" French, "1004" Spanish
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.write import update_campaign as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_id=campaign_id,
+        bidding_strategy=bidding_strategy,
+        target_cpa=target_cpa,
+        target_roas=target_roas,
+        daily_budget=daily_budget,
+        geo_target_ids=geo_target_ids,
+        language_ids=language_ids,
     )
 
 
