@@ -2,7 +2,7 @@
 
 # AdLoop
 
-**MCP server that connects Google Ads + Google Analytics (GA4) into one AI-driven feedback loop inside your IDE.**
+**Stop switching between Google Ads, GA4, and your code editor to figure out why conversions dropped.**
 
 [![PyPI](https://img.shields.io/pypi/v/adloop.svg)](https://pypi.org/project/adloop/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -12,23 +12,37 @@
 [![GA4 Data API](https://img.shields.io/badge/GA4-Data%20API-E37400.svg?logo=google-analytics&logoColor=white)](https://developers.google.com/analytics/devguides/reporting/data/v1)
 [![GitHub stars](https://img.shields.io/github/stars/kLOsk/adloop?style=social)](https://github.com/kLOsk/adloop)
 
-*26 tools · Read + Write · Safety-first · GDPR-aware*
+An MCP server that gives your AI assistant read + write access to Google Ads and GA4 — with safety guardrails that prevent accidental spend.
 
-> "You built your product with AI. Now manage your ads the same way."
+`pip install adloop`
 
 </div>
 
 ---
 
-## Why
+## What It Solves
 
-Solo founders and small teams ship products fast with AI-assisted coding — but managing Google Ads still means switching between the Ads UI, GA4 dashboards, and your code editor. Whether you're running a SaaS, an e-commerce store, a local service, or anything else you drive traffic to with Google Ads — the workflow is the same fragmented mess.
+AdLoop exists because managing Google Ads alongside your code is a mess. These are the specific problems it handles:
 
-AdLoop brings the entire **build → ship → market → measure → iterate** cycle into your IDE.
+- **"My conversions dropped and I don't know why."** AdLoop cross-references Ads clicks, GA4 sessions, and conversion events in one query. It detects whether the gap is from GDPR consent rejection, broken tracking, or an actual landing page problem — before you waste hours checking each dashboard separately.
 
-One MCP server gives your AI assistant access to both Google Analytics and Google Ads (read + write), with a safety layer that prevents accidental spend. Combined with your codebase context, it can do things no dashboard can — like diagnosing why conversions dropped by cross-referencing ad traffic, analytics events, and your actual frontend code.
+- **"I'm wasting ad spend on irrelevant searches."** Pull your search terms report, identify the junk, and add negative keywords — all from a single conversation in your IDE. No context-switching to the Ads UI.
 
-## What's Included — 26 Tools
+- **"Is my tracking even working?"** Compare the event names in your actual codebase against what GA4 is receiving. Find the mismatches: events you fire that GA4 never sees, events GA4 records that you didn't know about.
+
+- **"I need to create ads but the Google Ads UI is hostile."** Draft responsive search ads, create campaigns, add keywords — all through natural language. Every change shows a preview first. Nothing goes live without your explicit confirmation. New ads and campaigns start paused.
+
+- **"My landing page gets paid traffic but nobody converts."** AdLoop joins your ad final URLs with GA4 page-level data. See which pages get clicks but no conversions, which have high bounce rates, and which ones are orphaned from any ad campaign.
+
+- **"I don't know if my EU consent setup is causing data gaps."** In Europe, 30-70% of users reject analytics cookies. AdLoop accounts for this automatically — it won't diagnose a normal GDPR consent gap as broken tracking.
+
+## Built From Real Usage
+
+Every tool exists because of an actual problem hit while running real Google Ads campaigns. The cross-reference tools exist because we kept manually asking the AI to "get Ads data, then get GA4 data, then compare them" — so we automated the join. The Broad Match + Manual CPC safety rule exists because the AI once created that exact combination and wasted budget. The GDPR consent awareness exists because the AI kept diagnosing normal EU cookie rejection as broken tracking.
+
+The best features come from real workflows. If you're using AdLoop and find yourself wishing it could do something it can't, **open an issue describing your situation** — not just "add feature X" but "I was trying to do Y and couldn't because Z." The context matters more than the request.
+
+## All 26 Tools
 
 > **Quick start:** `pip install adloop` or `git clone https://github.com/kLOsk/adloop.git && cd adloop && uv sync && uv run adloop init`
 
@@ -329,14 +343,6 @@ src/adloop/
     ├── preview.py     # Change plans and previews
     └── audit.py       # Mutation audit logging
 ```
-
-## Built From Real Usage
-
-AdLoop isn't a theoretical tool — it's built from running real Google Ads campaigns and hitting real problems. Every tool exists because of an actual situation: needing to diagnose a conversion drop without leaving the IDE, wanting to bulk-add negative keywords after seeing wasted spend in the search terms report, drafting ad variants that match a landing page the AI just helped rewrite.
-
-The cross-reference tools exist because we kept manually asking the AI to "get Ads data, then get GA4 data, then compare them" — so we automated the join. The Broad Match + Manual CPC safety rule exists because the AI once created that exact combination and wasted budget. The GDPR consent awareness exists because the AI kept diagnosing normal EU cookie rejection as broken tracking.
-
-The best features come from real workflows. If you're using AdLoop and find yourself wishing it could do something it can't, **that's exactly the kind of feedback that shapes what gets built next.** Open an issue describing your situation — not just "add feature X" but "I was trying to do Y and couldn't because Z." The context matters more than the request.
 
 ## Roadmap
 
