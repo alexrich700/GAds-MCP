@@ -37,19 +37,47 @@ echo ""
 # -------------------------------------------
 echo -e "${BOLD}Step 1/6: Checking prerequisites...${NC}"
 
-# Python
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}Error: Python 3 not found. Run the pre-flight check first.${NC}"
+# Find Python 3.11+ (check versioned commands, Homebrew paths, then generic python3)
+PYTHON_CMD=""
+for cmd in python3.13 python3.12 python3.11; do
+    if command -v "$cmd" &> /dev/null; then
+        ver=$("$cmd" --version 2>&1 | awk '{print $2}')
+        minor=$(echo "$ver" | cut -d. -f2)
+        if [[ "$minor" -ge 11 ]]; then
+            PYTHON_CMD="$cmd"
+            break
+        fi
+    fi
+done
+if [[ -z "$PYTHON_CMD" ]]; then
+    for brew_cmd in /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 /usr/local/bin/python3.13 /usr/local/bin/python3.12 /usr/local/bin/python3.11; do
+        if [[ -x "$brew_cmd" ]]; then
+            ver=$("$brew_cmd" --version 2>&1 | awk '{print $2}')
+            minor=$(echo "$ver" | cut -d. -f2)
+            if [[ "$minor" -ge 11 ]]; then
+                PYTHON_CMD="$brew_cmd"
+                break
+            fi
+        fi
+    done
+fi
+if [[ -z "$PYTHON_CMD" ]]; then
+    if command -v python3 &> /dev/null; then
+        ver=$(python3 --version 2>&1 | awk '{print $2}')
+        minor=$(echo "$ver" | cut -d. -f2)
+        if [[ "$minor" -ge 11 ]]; then
+            PYTHON_CMD="python3"
+        fi
+    fi
+fi
+if [[ -z "$PYTHON_CMD" ]]; then
+    echo -e "${RED}Error: Python 3.11+ not found. Run the pre-flight check first.${NC}"
+    echo -e "  Tried: python3.12, python3.11, /opt/homebrew/bin/python3.12, python3"
     exit 1
 fi
 
-PY_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
-PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
-if [[ "$PY_MINOR" -lt 11 ]]; then
-    echo -e "${RED}Error: Python $PY_VERSION found but 3.11+ required. Run the pre-flight check first.${NC}"
-    exit 1
-fi
-echo -e "  ${GREEN}Python $PY_VERSION${NC}"
+PY_VERSION=$("$PYTHON_CMD" --version 2>&1 | awk '{print $2}')
+echo -e "  ${GREEN}Python $PY_VERSION (using: $PYTHON_CMD)${NC}"
 
 # Git
 if ! command -v git &> /dev/null; then
@@ -110,7 +138,7 @@ echo ""
 # -------------------------------------------
 echo -e "${BOLD}Step 4/6: Installing dependencies...${NC}"
 
-uv sync --quiet 2>/dev/null || uv sync
+uv sync --python "$PYTHON_CMD" --quiet 2>/dev/null || uv sync --python "$PYTHON_CMD"
 echo -e "  ${GREEN}Dependencies installed${NC}"
 echo ""
 
