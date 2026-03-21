@@ -97,6 +97,26 @@ class TestValidateAdGroup:
         )
         assert any("invalid match_type" in e for e in errors)
 
+    def test_keyword_null_match_type(self):
+        """MCP/JSON callers can send null for match_type."""
+        errors = _validate_ad_group(
+            campaign_id="123",
+            ad_group_name="Test",
+            keywords=[{"text": "shoes", "match_type": None}],
+            cpc_bid_micros=0,
+        )
+        assert any("invalid match_type" in e for e in errors)
+
+    def test_keyword_missing_match_type_key(self):
+        """Keywords without a match_type key should get a validation error."""
+        errors = _validate_ad_group(
+            campaign_id="123",
+            ad_group_name="Test",
+            keywords=[{"text": "shoes"}],
+            cpc_bid_micros=0,
+        )
+        assert any("invalid match_type" in e for e in errors)
+
 
 class TestPreflightAdGroupChecks:
     """Tests for _preflight_ad_group_checks using mocked GAQL queries."""
@@ -243,14 +263,16 @@ class TestPreflightAdGroupChecks:
         assert not any("BROAD" in w for w in warnings)
 
     @patch("adloop.ads.gaql.execute_query")
-    def test_api_failure_passes_through(self, mock_query, config):
-        """If API calls fail, preflight should not block the draft."""
+    def test_api_failure_surfaces_warning(self, mock_query, config):
+        """If API calls fail, preflight should warn but not block the draft."""
         mock_query.side_effect = Exception("API unavailable")
         errors, warnings = _preflight_ad_group_checks(
             config, "1234567890", "999", "New Group", [], 0
         )
         assert errors == []
-        assert warnings == []
+        assert len(warnings) == 1
+        assert "Preflight checks could not complete" in warnings[0]
+        assert "API unavailable" in warnings[0]
 
 
 class TestDraftAdGroup:

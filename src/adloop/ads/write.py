@@ -758,7 +758,7 @@ def _check_broad_match_safety(
 ) -> list[str]:
     """Warn if BROAD match keywords are being added to a non-Smart Bidding campaign."""
     has_broad = any(
-        kw.get("match_type", "").upper() == "BROAD" for kw in keywords
+        (kw.get("match_type") or "").upper() == "BROAD" for kw in keywords
     )
     if not has_broad:
         return []
@@ -885,7 +885,7 @@ def _validate_campaign(
 
     if keywords:
         has_broad = any(
-            kw.get("match_type", "").upper() == "BROAD" for kw in keywords
+            (kw.get("match_type") or "").upper() == "BROAD" for kw in keywords
         )
         if has_broad and bs not in _SMART_BIDDING_STRATEGIES:
             errors.append(
@@ -897,7 +897,7 @@ def _validate_campaign(
         for i, kw in enumerate(keywords):
             if not kw.get("text"):
                 errors.append(f"Keyword {i + 1} has no text")
-            mt = kw.get("match_type", "").upper()
+            mt = (kw.get("match_type") or "").upper()
             if mt not in _VALID_MATCH_TYPES:
                 errors.append(
                     f"Keyword {i + 1} has invalid match_type '{mt}' "
@@ -929,7 +929,7 @@ def _validate_keywords(ad_group_id: str, keywords: list[dict]) -> list[str]:
     for i, kw in enumerate(keywords):
         if not kw.get("text"):
             errors.append(f"Keyword {i + 1} has no text")
-        mt = kw.get("match_type", "").upper()
+        mt = (kw.get("match_type") or "").upper()
         if mt not in _VALID_MATCH_TYPES:
             errors.append(
                 f"Keyword {i + 1} has invalid match_type '{mt}' "
@@ -957,7 +957,7 @@ def _validate_ad_group(
         for i, kw in enumerate(keywords):
             if not kw.get("text"):
                 errors.append(f"Keyword {i + 1} has no text")
-            mt = kw.get("match_type", "").upper()
+            mt = (kw.get("match_type") or "").upper()
             if mt not in _VALID_MATCH_TYPES:
                 errors.append(
                     f"Keyword {i + 1} has invalid match_type '{mt}' "
@@ -1028,7 +1028,7 @@ def _preflight_ad_group_checks(
 
         # Check 3: BROAD match + non-Smart Bidding
         has_broad = any(
-            kw.get("match_type", "").upper() == "BROAD" for kw in keywords
+            (kw.get("match_type") or "").upper() == "BROAD" for kw in keywords
         )
         if has_broad and bidding not in _SMART_BIDDING_STRATEGIES:
             warnings.append(
@@ -1055,10 +1055,14 @@ def _preflight_ad_group_checks(
                 f"Consider using a different name to avoid confusion."
             )
 
-    except Exception:
-        # If API calls fail, allow the draft to proceed — the real
-        # validation happens at confirm_and_apply time.
-        pass
+    except Exception as exc:
+        # Surface preflight failures as warnings so users know checks
+        # were skipped, rather than silently producing a clean preview.
+        warnings.append(
+            f"Preflight checks could not complete ({exc}). "
+            "The draft will proceed, but some validations were skipped. "
+            "Full validation happens at confirm_and_apply time."
+        )
 
     return errors, warnings
 
