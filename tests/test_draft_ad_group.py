@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from adloop.ads.write import (
-    _check_broad_match_safety_by_campaign,
+    _preflight_ad_group_checks,
     _validate_ad_group,
     draft_ad_group,
 )
@@ -96,6 +96,161 @@ class TestValidateAdGroup:
             cpc_bid_micros=0,
         )
         assert any("invalid match_type" in e for e in errors)
+
+
+class TestPreflightAdGroupChecks:
+    """Tests for _preflight_ad_group_checks using mocked GAQL queries."""
+
+    def _mock_execute(self, campaign_rows, ad_group_rows=None):
+        """Return a side_effect function that returns different results per query."""
+        ad_group_rows = ad_group_rows or []
+
+        def side_effect(config, customer_id, query):
+            if "campaign.advertising_channel_type" in query:
+                return campaign_rows
+            if "ad_group.name" in query:
+                return ad_group_rows
+            return []
+
+        return side_effect
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_search_campaign_no_issues(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute(
+            [{"campaign.advertising_channel_type": "SEARCH",
+              "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
+              "campaign.name": "My Campaign"}],
+        )
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", [], 0
+        )
+        assert errors == []
+        assert warnings == []
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_display_campaign_rejected(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute(
+            [{"campaign.advertising_channel_type": "DISPLAY",
+              "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
+              "campaign.name": "Display Campaign"}],
+        )
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", [], 0
+        )
+        assert any("DISPLAY" in e for e in errors)
+        assert any("only supports SEARCH" in e for e in errors)
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_shopping_campaign_rejected(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute(
+            [{"campaign.advertising_channel_type": "SHOPPING",
+              "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
+              "campaign.name": "Shopping Campaign"}],
+        )
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", [], 0
+        )
+        assert any("SHOPPING" in e for e in errors)
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_campaign_not_found(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute([])
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", [], 0
+        )
+        assert any("not found" in e for e in errors)
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_duplicate_ad_group_name_warns(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute(
+            [{"campaign.advertising_channel_type": "SEARCH",
+              "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
+              "campaign.name": "My Campaign"}],
+            [{"ad_group.name": "Existing Group"}, {"ad_group.name": "Another"}],
+        )
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "Existing Group", [], 0
+        )
+        assert errors == []
+        assert any("already exists" in w for w in warnings)
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_no_duplicate_name_no_warning(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute(
+            [{"campaign.advertising_channel_type": "SEARCH",
+              "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
+              "campaign.name": "My Campaign"}],
+            [{"ad_group.name": "Other Group"}],
+        )
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", [], 0
+        )
+        assert errors == []
+        assert not any("already exists" in w for w in warnings)
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_cpc_bid_on_smart_bidding_warns(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute(
+            [{"campaign.advertising_channel_type": "SEARCH",
+              "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
+              "campaign.name": "Smart Campaign"}],
+        )
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", [], cpc_bid_micros=500000
+        )
+        assert errors == []
+        assert any("ignored" in w for w in warnings)
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_cpc_bid_on_manual_cpc_no_warning(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute(
+            [{"campaign.advertising_channel_type": "SEARCH",
+              "campaign.bidding_strategy_type": "MANUAL_CPC",
+              "campaign.name": "Manual Campaign"}],
+        )
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", [], cpc_bid_micros=500000
+        )
+        assert errors == []
+        assert not any("ignored" in w for w in warnings)
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_broad_match_non_smart_bidding_warns(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute(
+            [{"campaign.advertising_channel_type": "SEARCH",
+              "campaign.bidding_strategy_type": "MANUAL_CPC",
+              "campaign.name": "Manual Campaign"}],
+        )
+        keywords = [{"text": "shoes", "match_type": "BROAD"}]
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", keywords, 0
+        )
+        assert errors == []
+        assert any("DANGEROUS" in w and "BROAD" in w for w in warnings)
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_broad_match_smart_bidding_no_warning(self, mock_query, config):
+        mock_query.side_effect = self._mock_execute(
+            [{"campaign.advertising_channel_type": "SEARCH",
+              "campaign.bidding_strategy_type": "TARGET_CPA",
+              "campaign.name": "Smart Campaign"}],
+        )
+        keywords = [{"text": "shoes", "match_type": "BROAD"}]
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", keywords, 0
+        )
+        assert errors == []
+        assert not any("BROAD" in w for w in warnings)
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_api_failure_passes_through(self, mock_query, config):
+        """If API calls fail, preflight should not block the draft."""
+        mock_query.side_effect = Exception("API unavailable")
+        errors, warnings = _preflight_ad_group_checks(
+            config, "1234567890", "999", "New Group", [], 0
+        )
+        assert errors == []
+        assert warnings == []
 
 
 class TestDraftAdGroup:

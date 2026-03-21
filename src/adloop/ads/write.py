@@ -407,12 +407,12 @@ def draft_ad_group(
     if errors:
         return {"error": "Validation failed", "details": errors}
 
-    warnings: list[str] = []
     keywords = keywords or []
-    if keywords:
-        warnings = _check_broad_match_safety_by_campaign(
-            config, customer_id, campaign_id, keywords
-        )
+    preflight_errors, warnings = _preflight_ad_group_checks(
+        config, customer_id, campaign_id, ad_group_name, keywords, cpc_bid_micros
+    )
+    if preflight_errors:
+        return {"error": "Pre-flight check failed", "details": preflight_errors}
 
     plan = ChangePlan(
         operation="create_ad_group",
@@ -966,47 +966,101 @@ def _validate_ad_group(
     return errors
 
 
-def _check_broad_match_safety_by_campaign(
+def _preflight_ad_group_checks(
     config: AdLoopConfig,
     customer_id: str,
     campaign_id: str,
+    ad_group_name: str,
     keywords: list[dict],
-) -> list[str]:
-    """Warn if BROAD match keywords target a non-Smart Bidding campaign (by campaign_id)."""
-    has_broad = any(
-        kw.get("match_type", "").upper() == "BROAD" for kw in keywords
-    )
-    if not has_broad:
-        return []
+    cpc_bid_micros: int,
+) -> tuple[list[str], list[str]]:
+    """Run pre-flight checks before creating an ad group.
+
+    Returns (errors, warnings). Errors block the draft; warnings are informational.
+
+    Checks performed:
+    1. Campaign must be a SEARCH campaign (error if not).
+    2. Warn if an ad group with the same name already exists in the campaign.
+    3. Warn if cpc_bid_micros is set but campaign uses Smart Bidding (ignored).
+    4. Warn if BROAD match keywords + non-Smart Bidding campaign.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
 
     try:
         from adloop.ads.gaql import execute_query
 
-        query = f"""
-            SELECT campaign.bidding_strategy_type, campaign.name
+        # Query 1: campaign info (type, bidding, name)
+        campaign_query = f"""
+            SELECT campaign.advertising_channel_type,
+                   campaign.bidding_strategy_type,
+                   campaign.name
             FROM campaign
             WHERE campaign.id = {campaign_id}
         """
-        rows = execute_query(config, customer_id, query)
+        rows = execute_query(config, customer_id, campaign_query)
         if not rows:
-            return []
+            errors.append(
+                f"Campaign {campaign_id} not found. Verify the campaign ID "
+                "using get_campaign_performance."
+            )
+            return errors, warnings
 
-        bidding = rows[0].get("campaign.bidding_strategy_type", "")
-        campaign_name = rows[0].get("campaign.name", "")
+        row = rows[0]
+        channel_type = row.get("campaign.advertising_channel_type", "")
+        bidding = row.get("campaign.bidding_strategy_type", "")
+        campaign_name = row.get("campaign.name", "")
 
-        if bidding not in _SMART_BIDDING_STRATEGIES:
-            return [
+        # Check 1: campaign type must be SEARCH
+        if channel_type and channel_type != "SEARCH":
+            errors.append(
+                f"Campaign '{campaign_name}' is a {channel_type} campaign. "
+                "draft_ad_group only supports SEARCH campaigns."
+            )
+
+        # Check 3: cpc_bid_micros on Smart Bidding is ignored
+        if cpc_bid_micros and bidding in _SMART_BIDDING_STRATEGIES:
+            warnings.append(
+                f"Campaign '{campaign_name}' uses {bidding} (Smart Bidding). "
+                "The cpc_bid_micros value will be ignored — Smart Bidding "
+                "sets bids automatically."
+            )
+
+        # Check 4: BROAD match + non-Smart Bidding
+        has_broad = any(
+            kw.get("match_type", "").upper() == "BROAD" for kw in keywords
+        )
+        if has_broad and bidding not in _SMART_BIDDING_STRATEGIES:
+            warnings.append(
                 f"DANGEROUS: Adding BROAD match keywords to campaign "
                 f"'{campaign_name}' which uses {bidding} bidding. "
-                f"Broad Match without Smart Bidding (tCPA/tROAS/Maximize Conversions) "
-                f"leads to irrelevant matches and wasted budget. "
+                f"Broad Match without Smart Bidding (tCPA/tROAS/Maximize "
+                f"Conversions) leads to irrelevant matches and wasted budget. "
                 f"Use PHRASE or EXACT match instead, or switch the campaign "
                 f"to Smart Bidding first."
-            ]
+            )
+
+        # Query 2: existing ad groups (duplicate name check)
+        ag_query = f"""
+            SELECT ad_group.name
+            FROM ad_group
+            WHERE campaign.id = {campaign_id}
+        """
+        ag_rows = execute_query(config, customer_id, ag_query)
+        existing_names = {r.get("ad_group.name", "") for r in ag_rows}
+        if ad_group_name in existing_names:
+            warnings.append(
+                f"An ad group named '{ad_group_name}' already exists in "
+                f"campaign '{campaign_name}'. This will create a duplicate. "
+                f"Consider using a different name to avoid confusion."
+            )
+
     except Exception:
+        # If API calls fail, allow the draft to proceed — the real
+        # validation happens at confirm_and_apply time.
         pass
 
-    return []
+    return errors, warnings
 
 
 def _draft_status_change(
