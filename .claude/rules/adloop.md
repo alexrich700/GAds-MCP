@@ -72,9 +72,9 @@ These tools call both APIs internally and return unified results with computed `
 
 | Tool | What It Does | Validation |
 |------|-------------|------------|
-| `draft_campaign` | Create full campaign structure (budget + campaign + ad group + keywords + geo/language targeting) | `campaign_name`, `daily_budget`, `bidding_strategy`, `geo_target_ids` (REQUIRED), `language_ids` (REQUIRED), keywords validated |
+| `draft_campaign` | Create full campaign structure (budget + campaign + ad group + keywords + geo/language targeting). Auto-sets Final URL Suffix with UTM tracking for SEARCH campaigns. | `campaign_name`, `daily_budget`, `bidding_strategy`, `geo_target_ids` (REQUIRED), `language_ids` (REQUIRED), keywords validated, `final_url_suffix` (auto-set for SEARCH, pass "" to disable) |
 | `draft_ad_group` | Create a new ad group within an existing campaign (does NOT publish) | `campaign_id` (REQUIRED), `ad_group_name` (REQUIRED), `keywords` (optional list of {text, match_type}), `cpc_bid_micros` (optional) |
-| `update_campaign` | Modify existing campaign settings — bid strategy, budget, geo targets, language targets | `campaign_id` (REQUIRED), plus any of: `bidding_strategy`, `daily_budget`, `geo_target_ids`, `language_ids` |
+| `update_campaign` | Modify existing campaign settings — bid strategy, budget, geo targets, language targets, Final URL suffix | `campaign_id` (REQUIRED), plus any of: `bidding_strategy`, `daily_budget`, `geo_target_ids`, `language_ids`, `final_url_suffix` |
 | `draft_responsive_search_ad` | Create RSA preview (does NOT publish) | 3-15 headlines (≤30 chars), 2-4 descriptions (≤90 chars), final_url required, path1/path2 (≤15 chars each) |
 | `draft_sitelinks` | Create sitelink extensions for a campaign (does NOT publish) | `campaign_id`, `sitelinks` list of {link_text ≤25 chars, final_url, description1 ≤35 chars, description2 ≤35 chars} |
 | `draft_keywords` | Propose keyword additions (does NOT add) | Each keyword needs `text` and `match_type` (EXACT/PHRASE/BROAD) |

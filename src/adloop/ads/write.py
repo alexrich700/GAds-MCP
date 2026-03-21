@@ -304,6 +304,7 @@ def draft_campaign(
     keywords: list[dict] | None = None,
     geo_target_ids: list[str] | None = None,
     language_ids: list[str] | None = None,
+    final_url_suffix: str | None = None,
 ) -> dict:
     """Draft a full campaign structure — returns preview, does NOT execute.
 
@@ -315,6 +316,8 @@ def draft_campaign(
         ["2840"] for USA). REQUIRED — campaigns must target specific countries.
     language_ids: list of language constant IDs (e.g. ["1001"] for German,
         ["1000"] for English). REQUIRED — campaigns must target specific languages.
+    final_url_suffix: UTM suffix auto-applied to SEARCH campaigns. Pass "" to
+        disable. Defaults to standard UTM tracking with ValueTrack parameters.
     """
     from adloop.safety.guards import (
         SafetyViolation,
@@ -348,6 +351,10 @@ def draft_campaign(
     except SafetyViolation as e:
         return {"error": str(e)}
 
+    # Resolve final_url_suffix: explicit param > hardcoded default (SEARCH only)
+    if final_url_suffix is None and channel_type.upper() == "SEARCH":
+        final_url_suffix = _DEFAULT_FINAL_URL_SUFFIX
+
     plan = ChangePlan(
         operation="create_campaign",
         entity_type="campaign",
@@ -363,6 +370,7 @@ def draft_campaign(
             "keywords": keywords,
             "geo_target_ids": geo_target_ids or [],
             "language_ids": language_ids or [],
+            "final_url_suffix": final_url_suffix or "",
         },
     )
     store_plan(plan)
@@ -443,11 +451,13 @@ def update_campaign(
     daily_budget: float = 0,
     geo_target_ids: list[str] | None = None,
     language_ids: list[str] | None = None,
+    final_url_suffix: str | None = None,
 ) -> dict:
     """Draft an update to an existing campaign — returns preview, does NOT execute.
 
     All parameters except campaign_id are optional — only include what you want
     to change. Geo/language targets are REPLACED entirely (not appended).
+    final_url_suffix: set or change the campaign's Final URL suffix. Pass "" to clear.
     """
     from adloop.safety.guards import (
         SafetyViolation,
@@ -494,6 +504,7 @@ def update_campaign(
 
     has_any_change = any([
         bs, daily_budget, geo_target_ids is not None, language_ids is not None,
+        final_url_suffix is not None,
     ])
     if not has_any_change:
         errors.append("No changes specified — provide at least one parameter to update")
@@ -526,6 +537,8 @@ def update_campaign(
         changes["geo_target_ids"] = geo_target_ids
     if language_ids is not None:
         changes["language_ids"] = language_ids
+    if final_url_suffix is not None:
+        changes["final_url_suffix"] = final_url_suffix
 
     plan = ChangePlan(
         operation="update_campaign",
@@ -741,6 +754,13 @@ def confirm_and_apply(
 _VALID_MATCH_TYPES = {"EXACT", "PHRASE", "BROAD"}
 _VALID_ENTITY_TYPES = {"campaign", "ad_group", "ad", "keyword"}
 _REMOVABLE_ENTITY_TYPES = _VALID_ENTITY_TYPES | {"negative_keyword", "campaign_asset"}
+
+_DEFAULT_FINAL_URL_SUFFIX = (
+    "utm_source=google&utm_medium=cpc"
+    "&utm_campaign={campaignid}"
+    "&utm_content={adgroupid}"
+    "&utm_term={keyword}"
+)
 
 _SMART_BIDDING_STRATEGIES = {
     "MAXIMIZE_CONVERSIONS",
@@ -1214,6 +1234,11 @@ def _apply_create_campaign(client: object, cid: str, changes: dict) -> dict:
         client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
     )
 
+    # Final URL suffix — auto-set for SEARCH campaigns (UTM tracking)
+    suffix = changes.get("final_url_suffix")
+    if suffix:
+        campaign.final_url_suffix = suffix
+
     operations.append(campaign_op)
 
     # 3. AdGroup (temp ID: -3, references campaign -2)
@@ -1408,6 +1433,18 @@ def _apply_update_campaign(client: object, cid: str, changes: dict) -> dict:
             field_mask_pb2.FieldMask(paths=["amount_micros"])
         )
         operations.append(budget_op)
+
+    # Final URL suffix change
+    new_suffix = changes.get("final_url_suffix")
+    if new_suffix is not None:
+        suffix_op = client.get_type("MutateOperation")
+        suffix_campaign = suffix_op.campaign_operation.update
+        suffix_campaign.resource_name = resource_name
+        suffix_campaign.final_url_suffix = new_suffix
+        suffix_op.campaign_operation.update_mask.CopyFrom(
+            field_mask_pb2.FieldMask(paths=["final_url_suffix"])
+        )
+        operations.append(suffix_op)
 
     # Geo targeting — remove existing, add new
     geo_ids = changes.get("geo_target_ids")

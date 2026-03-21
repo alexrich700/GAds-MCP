@@ -468,6 +468,7 @@ def draft_campaign(
     channel_type: str = "SEARCH",
     ad_group_name: str = "",
     keywords: list[dict] | None = None,
+    final_url_suffix: str | None = None,
 ) -> dict:
     """Draft a full campaign structure — returns a PREVIEW, does NOT create anything.
 
@@ -486,6 +487,9 @@ def draft_campaign(
     language_ids: REQUIRED list of language constant IDs
         Common: "1001" German, "1000" English, "1002" French, "1004" Spanish,
         "1014" Portuguese. Full list: Google Ads API language constants.
+    final_url_suffix: UTM suffix auto-applied to SEARCH campaigns. Pass "" to
+        disable. Defaults to standard UTM tracking with ValueTrack parameters:
+        utm_source=google&utm_medium=cpc&utm_campaign={campaignid}&utm_content={adgroupid}&utm_term={keyword}
 
     Call confirm_and_apply with the returned plan_id to execute.
     """
@@ -504,6 +508,7 @@ def draft_campaign(
         keywords=keywords,
         geo_target_ids=geo_target_ids,
         language_ids=language_ids,
+        final_url_suffix=final_url_suffix,
     )
 
 
@@ -551,6 +556,7 @@ def update_campaign(
     daily_budget: float = 0,
     geo_target_ids: list[str] | None = None,
     language_ids: list[str] | None = None,
+    final_url_suffix: str | None = None,
 ) -> dict:
     """Draft an update to an existing campaign — returns a PREVIEW, does NOT apply.
 
@@ -566,6 +572,7 @@ def update_campaign(
         "2040" Austria, "2756" Switzerland, "2840" USA, "2826" UK
     language_ids: REPLACES all language targets. Common IDs: "1001" German,
         "1000" English, "1002" French, "1004" Spanish
+    final_url_suffix: set or change the campaign's Final URL suffix. Pass "" to clear.
 
     Call confirm_and_apply with the returned plan_id to execute.
     """
@@ -581,6 +588,7 @@ def update_campaign(
         daily_budget=daily_budget,
         geo_target_ids=geo_target_ids,
         language_ids=language_ids,
+        final_url_suffix=final_url_suffix,
     )
 
 
