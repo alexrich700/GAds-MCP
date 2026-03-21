@@ -179,9 +179,16 @@ def draft_rsa_replacement(
     final_url: str = "",
     path1: str = "",
     path2: str = "",
-    remove_old: bool = False,
+    remove_old: bool = True,
 ) -> dict:
-    """Draft an RSA replacement — creates new ad and pauses/removes the old one.
+    """Draft an RSA replacement — creates new ad and removes the old one.
+
+    Use this to **fix issues** with an existing RSA (wrong copy, character
+    errors, data inconsistencies, truncated city names, etc.).  The old ad
+    is removed by default so it cannot be accidentally re-enabled.
+
+    For A/B testing or creating ad variants, use ``draft_responsive_search_ad``
+    to add a new ad alongside the existing one instead.
 
     Fetches the existing ad's details, validates the new copy, and returns a
     preview with an old-vs-new diff.  Does NOT execute until confirmed.

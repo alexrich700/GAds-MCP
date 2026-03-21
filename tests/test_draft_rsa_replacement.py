@@ -78,7 +78,7 @@ class TestDraftRsaReplacement:
             "ad_group_ad.ad.responsive_search_ad.headlines"
         ]
         assert result["diff"]["new"]["headlines"] == VALID_HEADLINES
-        assert result["diff"]["old_ad_action"] == "PAUSE"
+        assert result["diff"]["old_ad_action"] == "REMOVE"
 
         # Verify plan stored correctly
         plan = get_plan(result["plan_id"])
@@ -87,7 +87,7 @@ class TestDraftRsaReplacement:
         assert plan.entity_id == "12345"
         assert plan.changes["ad_group_id"] == "777"
         assert plan.changes["old_ad_id"] == "12345"
-        assert not plan.requires_double_confirm
+        assert plan.requires_double_confirm  # default is remove
         remove_plan(result["plan_id"])
 
     def test_missing_ad_id(self, config):
@@ -181,9 +181,10 @@ class TestDraftRsaReplacement:
 
     @patch("adloop.ads.write._validate_urls", return_value={})
     @patch("adloop.ads.write._fetch_existing_rsa")
-    def test_remove_old_requires_double_confirm(
+    def test_default_removes_old_with_double_confirm(
         self, mock_fetch, mock_urls, config
     ):
+        """Default behavior removes old ad, which requires double confirmation."""
         mock_fetch.return_value = EXISTING_RSA
         result = draft_rsa_replacement(
             config,
@@ -191,7 +192,6 @@ class TestDraftRsaReplacement:
             ad_id="12345",
             headlines=VALID_HEADLINES,
             descriptions=VALID_DESCRIPTIONS,
-            remove_old=True,
         )
         assert "plan_id" in result
         assert result["diff"]["old_ad_action"] == "REMOVE"
@@ -202,9 +202,10 @@ class TestDraftRsaReplacement:
 
     @patch("adloop.ads.write._validate_urls", return_value={})
     @patch("adloop.ads.write._fetch_existing_rsa")
-    def test_default_does_not_require_double_confirm(
+    def test_keep_old_paused_no_double_confirm(
         self, mock_fetch, mock_urls, config
     ):
+        """When remove_old=False, old ad is paused (no double confirm needed)."""
         mock_fetch.return_value = EXISTING_RSA
         result = draft_rsa_replacement(
             config,
@@ -212,7 +213,9 @@ class TestDraftRsaReplacement:
             ad_id="12345",
             headlines=VALID_HEADLINES,
             descriptions=VALID_DESCRIPTIONS,
+            remove_old=False,
         )
+        assert result["diff"]["old_ad_action"] == "PAUSE"
         plan = get_plan(result["plan_id"])
         assert plan.requires_double_confirm is not True
         remove_plan(result["plan_id"])

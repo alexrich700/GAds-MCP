@@ -632,15 +632,20 @@ def draft_rsa_replacement(
     customer_id: str = "",
     path1: str = "",
     path2: str = "",
-    remove_old: bool = False,
+    remove_old: bool = True,
 ) -> dict:
-    """Draft an RSA replacement — creates a new ad and pauses the old one.
+    """Fix an existing RSA — creates a corrected replacement and removes the old ad.
 
-    Provide the ad_id of the existing RSA to replace, plus the complete new copy.
+    Use this to fix issues with an existing RSA: wrong copy, character errors,
+    data inconsistencies, truncated names, etc. The old ad is REMOVED by default
+    so it cannot be accidentally re-enabled.
+
+    For A/B testing or adding ad variants, use draft_responsive_search_ad instead.
+
+    Provide the ad_id of the RSA to fix, plus the complete corrected copy.
     The tool fetches the old ad's details and shows a side-by-side diff preview.
     The new ad inherits the ad group from the old one and is created as PAUSED.
     If final_url is omitted, the old ad's URL is reused.
-    By default the old ad is paused; set remove_old=true for permanent removal.
     Call confirm_and_apply with the returned plan_id to execute.
     """
     from adloop.ads.write import draft_rsa_replacement as _impl
