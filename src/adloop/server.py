@@ -509,6 +509,39 @@ def draft_campaign(
 
 @mcp.tool(annotations=_WRITE)
 @_safe
+def draft_ad_group(
+    campaign_id: str,
+    ad_group_name: str,
+    keywords: list[dict] | None = None,
+    customer_id: str = "",
+    cpc_bid_micros: int = 0,
+) -> dict:
+    """Draft a new ad group within an existing campaign — returns a PREVIEW, does NOT create.
+
+    Creates an ad group (ENABLED, type SEARCH_STANDARD) in the specified campaign.
+    Optionally includes keywords in the same atomic operation.
+
+    campaign_id: The campaign to add the ad group to (get from get_campaign_performance).
+    ad_group_name: Name for the new ad group.
+    keywords: Optional list of {"text": "keyword", "match_type": "EXACT|PHRASE|BROAD"}.
+    cpc_bid_micros: Optional ad group CPC bid in micros (only for MANUAL_CPC campaigns).
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.write import draft_ad_group as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_id=campaign_id,
+        ad_group_name=ad_group_name,
+        keywords=keywords,
+        cpc_bid_micros=cpc_bid_micros,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
 def update_campaign(
     campaign_id: str,
     customer_id: str = "",

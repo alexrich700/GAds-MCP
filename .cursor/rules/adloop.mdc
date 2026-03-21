@@ -78,6 +78,7 @@ These tools call both APIs internally and return unified results with computed `
 | Tool | What It Does | Validation |
 |------|-------------|------------|
 | `draft_campaign` | Create full campaign structure (budget + campaign + ad group + keywords + geo/language targeting) | `campaign_name`, `daily_budget`, `bidding_strategy`, `geo_target_ids` (REQUIRED), `language_ids` (REQUIRED), keywords validated |
+| `draft_ad_group` | Create a new ad group within an existing campaign (does NOT publish) | `campaign_id` (REQUIRED), `ad_group_name` (REQUIRED), `keywords` (optional list of {text, match_type}), `cpc_bid_micros` (optional) |
 | `update_campaign` | Modify existing campaign settings — bid strategy, budget, geo targets, language targets | `campaign_id` (REQUIRED), plus any of: `bidding_strategy`, `daily_budget`, `geo_target_ids`, `language_ids` |
 | `draft_responsive_search_ad` | Create RSA preview (does NOT publish) | 3-15 headlines (≤30 chars), 2-4 descriptions (≤90 chars), final_url required, path1/path2 (≤15 chars each) |
 | `draft_sitelinks` | Create sitelink extensions for a campaign (does NOT publish) | `campaign_id`, `sitelinks` list of {link_text ≤25 chars, final_url, description1 ≤35 chars, description2 ≤35 chars} |
@@ -209,8 +210,21 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 7. After campaign creation, remind the user to:
    - Add ads via `draft_responsive_search_ad` (with display paths set)
    - Add sitelinks via `draft_sitelinks` (at least 4 recommended)
+   - If the user needs multiple ad groups (e.g., different keyword themes), use `draft_ad_group` to add additional ad groups after the initial campaign is created and confirmed
    - Enable the campaign via `enable_entity` only after ads and sitelinks are in place
 8. Wait for explicit user approval before calling `confirm_and_apply`
+
+### When user wants to add an ad group to an existing campaign
+
+1. Call `get_campaign_performance` to identify the target campaign and verify it exists
+2. **Pre-write checks (CRITICAL):**
+   - Check the campaign's bidding strategy — if MANUAL_CPC, only use EXACT or PHRASE match keywords
+   - Check if conversion tracking is active (zero conversions + high spend = problem to fix first)
+   - Check existing ad groups via `run_gaql`: `SELECT ad_group.id, ad_group.name FROM ad_group WHERE campaign.id = {campaign_id}` — avoid duplicate ad group names
+3. Call `draft_ad_group` with `campaign_id`, `ad_group_name`, and optional `keywords`
+4. Present the complete preview to the user
+5. Wait for explicit user approval before calling `confirm_and_apply`
+6. After the ad group is created, remind the user to add RSAs via `draft_responsive_search_ad` using the new `ad_group_id` from the result — an ad group without ads won't serve
 
 ### When user wants to change campaign settings (bid strategy, targeting, budget)
 

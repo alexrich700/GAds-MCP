@@ -372,6 +372,66 @@ def draft_campaign(
     return preview
 
 
+def draft_ad_group(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    campaign_id: str = "",
+    ad_group_name: str = "",
+    keywords: list[dict] | None = None,
+    cpc_bid_micros: int = 0,
+) -> dict:
+    """Draft a new ad group within an existing campaign — returns preview.
+
+    Creates: AdGroup (ENABLED, SEARCH_STANDARD) + optional Keywords.
+    Ads are NOT included — use draft_responsive_search_ad separately
+    after the ad group is created.
+
+    cpc_bid_micros: Optional ad-group-level CPC bid in micros. Only relevant
+        for campaigns using MANUAL_CPC bidding.
+    """
+    from adloop.safety.guards import SafetyViolation, check_blocked_operation
+    from adloop.safety.preview import ChangePlan, store_plan
+
+    try:
+        check_blocked_operation("create_ad_group", config.safety)
+    except SafetyViolation as e:
+        return {"error": str(e)}
+
+    errors = _validate_ad_group(
+        campaign_id=campaign_id,
+        ad_group_name=ad_group_name,
+        keywords=keywords,
+        cpc_bid_micros=cpc_bid_micros,
+    )
+    if errors:
+        return {"error": "Validation failed", "details": errors}
+
+    keywords = keywords or []
+    preflight_errors, warnings = _preflight_ad_group_checks(
+        config, customer_id, campaign_id, ad_group_name, keywords, cpc_bid_micros
+    )
+    if preflight_errors:
+        return {"error": "Pre-flight check failed", "details": preflight_errors}
+
+    plan = ChangePlan(
+        operation="create_ad_group",
+        entity_type="ad_group",
+        customer_id=customer_id,
+        changes={
+            "campaign_id": campaign_id,
+            "ad_group_name": ad_group_name,
+            "keywords": keywords,
+            "cpc_bid_micros": cpc_bid_micros,
+        },
+    )
+    store_plan(plan)
+    preview = plan.to_preview()
+    if warnings:
+        preview["warnings"] = warnings
+    return preview
+
+
 def update_campaign(
     config: AdLoopConfig,
     *,
@@ -698,7 +758,7 @@ def _check_broad_match_safety(
 ) -> list[str]:
     """Warn if BROAD match keywords are being added to a non-Smart Bidding campaign."""
     has_broad = any(
-        kw.get("match_type", "").upper() == "BROAD" for kw in keywords
+        (kw.get("match_type") or "").upper() == "BROAD" for kw in keywords
     )
     if not has_broad:
         return []
@@ -825,7 +885,7 @@ def _validate_campaign(
 
     if keywords:
         has_broad = any(
-            kw.get("match_type", "").upper() == "BROAD" for kw in keywords
+            (kw.get("match_type") or "").upper() == "BROAD" for kw in keywords
         )
         if has_broad and bs not in _SMART_BIDDING_STRATEGIES:
             errors.append(
@@ -837,7 +897,7 @@ def _validate_campaign(
         for i, kw in enumerate(keywords):
             if not kw.get("text"):
                 errors.append(f"Keyword {i + 1} has no text")
-            mt = kw.get("match_type", "").upper()
+            mt = (kw.get("match_type") or "").upper()
             if mt not in _VALID_MATCH_TYPES:
                 errors.append(
                     f"Keyword {i + 1} has invalid match_type '{mt}' "
@@ -869,13 +929,142 @@ def _validate_keywords(ad_group_id: str, keywords: list[dict]) -> list[str]:
     for i, kw in enumerate(keywords):
         if not kw.get("text"):
             errors.append(f"Keyword {i + 1} has no text")
-        mt = kw.get("match_type", "").upper()
+        mt = (kw.get("match_type") or "").upper()
         if mt not in _VALID_MATCH_TYPES:
             errors.append(
                 f"Keyword {i + 1} has invalid match_type '{mt}' "
                 "(must be EXACT, PHRASE, or BROAD)"
             )
     return errors
+
+
+def _validate_ad_group(
+    *,
+    campaign_id: str,
+    ad_group_name: str,
+    keywords: list[dict] | None,
+    cpc_bid_micros: int,
+) -> list[str]:
+    """Validate inputs for draft_ad_group."""
+    errors = []
+    if not campaign_id:
+        errors.append("campaign_id is required")
+    if not ad_group_name or not ad_group_name.strip():
+        errors.append("ad_group_name is required")
+    if cpc_bid_micros < 0:
+        errors.append("cpc_bid_micros must be >= 0")
+    if keywords:
+        for i, kw in enumerate(keywords):
+            if not kw.get("text"):
+                errors.append(f"Keyword {i + 1} has no text")
+            mt = (kw.get("match_type") or "").upper()
+            if mt not in _VALID_MATCH_TYPES:
+                errors.append(
+                    f"Keyword {i + 1} has invalid match_type '{mt}' "
+                    "(must be EXACT, PHRASE, or BROAD)"
+                )
+    return errors
+
+
+def _preflight_ad_group_checks(
+    config: AdLoopConfig,
+    customer_id: str,
+    campaign_id: str,
+    ad_group_name: str,
+    keywords: list[dict],
+    cpc_bid_micros: int,
+) -> tuple[list[str], list[str]]:
+    """Run pre-flight checks before creating an ad group.
+
+    Returns (errors, warnings). Errors block the draft; warnings are informational.
+
+    Checks performed:
+    1. Campaign must be a SEARCH campaign (error if not).
+    2. Warn if cpc_bid_micros is set but campaign uses Smart Bidding (ignored).
+    3. Warn if BROAD match keywords + non-Smart Bidding campaign.
+    4. Warn if an ad group with the same name already exists in the campaign.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    try:
+        from adloop.ads.gaql import execute_query
+
+        # Query 1: campaign info (type, bidding, name)
+        campaign_query = f"""
+            SELECT campaign.advertising_channel_type,
+                   campaign.bidding_strategy_type,
+                   campaign.name
+            FROM campaign
+            WHERE campaign.id = {campaign_id}
+        """
+        rows = execute_query(config, customer_id, campaign_query)
+        if not rows:
+            errors.append(
+                f"Campaign {campaign_id} not found. Verify the campaign ID "
+                "using get_campaign_performance."
+            )
+            return errors, warnings
+
+        row = rows[0]
+        channel_type = row.get("campaign.advertising_channel_type", "")
+        bidding = row.get("campaign.bidding_strategy_type", "")
+        campaign_name = row.get("campaign.name", "")
+
+        # Check 1: campaign type must be SEARCH
+        if channel_type and channel_type != "SEARCH":
+            errors.append(
+                f"Campaign '{campaign_name}' is a {channel_type} campaign. "
+                "draft_ad_group only supports SEARCH campaigns."
+            )
+
+        # Check 2: cpc_bid_micros on Smart Bidding is ignored
+        if cpc_bid_micros and bidding in _SMART_BIDDING_STRATEGIES:
+            warnings.append(
+                f"Campaign '{campaign_name}' uses {bidding} (Smart Bidding). "
+                "The cpc_bid_micros value will be ignored — Smart Bidding "
+                "sets bids automatically."
+            )
+
+        # Check 3: BROAD match + non-Smart Bidding
+        has_broad = any(
+            (kw.get("match_type") or "").upper() == "BROAD" for kw in keywords
+        )
+        if has_broad and bidding not in _SMART_BIDDING_STRATEGIES:
+            warnings.append(
+                f"DANGEROUS: Adding BROAD match keywords to campaign "
+                f"'{campaign_name}' which uses {bidding} bidding. "
+                f"Broad Match without Smart Bidding (tCPA/tROAS/Maximize "
+                f"Conversions) leads to irrelevant matches and wasted budget. "
+                f"Use PHRASE or EXACT match instead, or switch the campaign "
+                f"to Smart Bidding first."
+            )
+
+        # Check 4: existing ad groups (duplicate name check)
+        ag_query = f"""
+            SELECT ad_group.name
+            FROM ad_group
+            WHERE campaign.id = {campaign_id}
+        """
+        ag_rows = execute_query(config, customer_id, ag_query)
+        existing_names = {r.get("ad_group.name", "") for r in ag_rows}
+        if ad_group_name in existing_names:
+            warnings.append(
+                f"An ad group named '{ad_group_name}' already exists in "
+                f"campaign '{campaign_name}'. This will create a duplicate. "
+                f"Consider using a different name to avoid confusion."
+            )
+
+    except Exception as exc:
+        # Surface preflight failures as warnings so users know checks
+        # were skipped, rather than silently producing a clean preview.
+        warnings.append(
+            f"Preflight checks could not complete ({exc}). "
+            "The draft will proceed, but some validations were skipped. "
+            "Full validation happens at confirm_and_apply time."
+        )
+
+    return errors, warnings
 
 
 def _draft_status_change(
@@ -929,6 +1118,7 @@ def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
 
     dispatch = {
         "create_campaign": _apply_create_campaign,
+        "create_ad_group": _apply_create_ad_group,
         "update_campaign": _apply_update_campaign,
         "create_responsive_search_ad": _apply_create_rsa,
         "add_keywords": _apply_add_keywords,
@@ -1091,6 +1281,54 @@ def _apply_create_campaign(client: object, cid: str, changes: dict) -> dict:
                 results.setdefault("geo_targets", []).append(resource)
             else:
                 results.setdefault("language_targets", []).append(resource)
+
+    return results
+
+
+def _apply_create_ad_group(client: object, cid: str, changes: dict) -> dict:
+    """Create ad group + optional keywords in an existing campaign atomically."""
+    service = client.get_service("GoogleAdsService")
+    campaign_service = client.get_service("CampaignService")
+    ad_group_service = client.get_service("AdGroupService")
+
+    operations: list = []
+
+    # 1. AdGroup (temp ID: -1, references existing campaign)
+    ag_op = client.get_type("MutateOperation")
+    ad_group = ag_op.ad_group_operation.create
+    ad_group.resource_name = ad_group_service.ad_group_path(cid, "-1")
+    ad_group.name = changes["ad_group_name"]
+    ad_group.campaign = campaign_service.campaign_path(cid, changes["campaign_id"])
+    ad_group.status = client.enums.AdGroupStatusEnum.ENABLED
+    ad_group.type_ = client.enums.AdGroupTypeEnum.SEARCH_STANDARD
+    if changes.get("cpc_bid_micros"):
+        ad_group.cpc_bid_micros = changes["cpc_bid_micros"]
+    operations.append(ag_op)
+
+    # 2. Keywords (reference ad_group -1)
+    kw_list = changes.get("keywords") or []
+    for kw in kw_list:
+        kw_op = client.get_type("MutateOperation")
+        criterion = kw_op.ad_group_criterion_operation.create
+        criterion.ad_group = ad_group_service.ad_group_path(cid, "-1")
+        criterion.keyword.text = kw["text"]
+        criterion.keyword.match_type = getattr(
+            client.enums.KeywordMatchTypeEnum, kw["match_type"].upper()
+        )
+        operations.append(kw_op)
+
+    response = service.mutate(customer_id=cid, mutate_operations=operations)
+
+    results: dict = {}
+    for i, resp in enumerate(response.mutate_operation_responses):
+        resp_type = resp.WhichOneof("response")
+        if resp_type:
+            inner = getattr(resp, resp_type)
+            resource = getattr(inner, "resource_name", str(inner))
+            if i == 0:
+                results["ad_group"] = resource
+            else:
+                results.setdefault("keywords", []).append(resource)
 
     return results
 
