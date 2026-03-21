@@ -76,6 +76,7 @@ These tools call both APIs internally and return unified results with computed `
 | `draft_ad_group` | Create a new ad group within an existing campaign (does NOT publish) | `campaign_id` (REQUIRED), `ad_group_name` (REQUIRED), `keywords` (optional list of {text, match_type}), `cpc_bid_micros` (optional) |
 | `update_campaign` | Modify existing campaign settings — bid strategy, budget, geo targets, language targets, Final URL suffix | `campaign_id` (REQUIRED), plus any of: `bidding_strategy`, `daily_budget`, `geo_target_ids`, `language_ids`, `final_url_suffix` |
 | `draft_responsive_search_ad` | Create RSA preview (does NOT publish) | 3-15 headlines (≤30 chars), 2-4 descriptions (≤90 chars), final_url required, path1/path2 (≤15 chars each) |
+| `draft_rsa_replacement` | Replace an existing RSA with updated copy (creates new + pauses old) | `ad_id` (REQUIRED), 3-15 headlines (≤30 chars), 2-4 descriptions (≤90 chars), `final_url` (inherits from old ad if blank), path1/path2 (≤15 chars each), `remove_old` (default false) |
 | `draft_sitelinks` | Create sitelink extensions for a campaign (does NOT publish) | `campaign_id`, `sitelinks` list of {link_text ≤25 chars, final_url, description1 ≤35 chars, description2 ≤35 chars} |
 | `draft_keywords` | Propose keyword additions (does NOT add) | Each keyword needs `text` and `match_type` (EXACT/PHRASE/BROAD) |
 | `add_negative_keywords` | Propose negative keywords (does NOT add) | `campaign_id`, keyword list, `match_type` |
@@ -175,6 +176,22 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 8. Present the complete preview to the user — include any warnings from the pre-write checks
 9. After the ad is created, **suggest sitelinks** if the campaign doesn't have any. Use `draft_sitelinks` with at least 4 relevant links (key pages like pricing, features, signup, etc.). Sitelinks increase ad real estate and CTR.
 10. Wait for explicit user approval before calling `confirm_and_apply`
+
+### When user wants to edit or fix an existing RSA
+
+1. Call `get_ad_performance` to find the ad ID and see current copy
+2. **Pre-write checks (same as ad creation):**
+   - Is the campaign's bidding strategy appropriate?
+   - Does the campaign have conversions?
+   - What are quality scores?
+3. Review the current headlines and descriptions — identify exactly what needs changing
+4. Write the complete new set of headlines (3-15) and descriptions (2-4), following the "Ad Copy Character Limits" section. Count characters for every headline before generating.
+5. If the user hasn't specified a `final_url`, the tool inherits it from the old ad — no need to provide it
+6. Call `draft_rsa_replacement` with the old `ad_id` and the complete new copy
+7. Present the diff preview (old vs new) to the user — the preview shows both old and new copy side-by-side plus whether the old ad will be paused or removed
+8. Wait for explicit user approval before calling `confirm_and_apply`
+9. The new ad is created as PAUSED. Remind the user to enable it via `enable_entity` after reviewing in Google Ads UI
+10. By default the old ad is paused (recoverable). Only use `remove_old=true` if the user explicitly asks for permanent removal
 
 ### When user wants to add keywords
 

@@ -59,6 +59,43 @@ def _validate_urls(urls: list[str], timeout: int = 10) -> dict[str, str | None]:
 
 
 # ---------------------------------------------------------------------------
+# Fetch existing ad — used by replacement tools
+# ---------------------------------------------------------------------------
+
+
+def _fetch_existing_rsa(
+    config: AdLoopConfig,
+    customer_id: str,
+    ad_id: str,
+) -> dict | None:
+    """Fetch an existing RSA's headlines, descriptions, URLs, paths, and ad_group_id.
+
+    Returns a flat dict from GAQL, or ``None`` if the ad is not found or not an RSA.
+    """
+    from adloop.ads.gaql import execute_query
+
+    query = (
+        "SELECT ad_group.id, ad_group_ad.ad.id, ad_group_ad.ad.type, "
+        "ad_group_ad.ad.responsive_search_ad.headlines, "
+        "ad_group_ad.ad.responsive_search_ad.descriptions, "
+        "ad_group_ad.ad.final_urls, "
+        "ad_group_ad.ad.responsive_search_ad.path1, "
+        "ad_group_ad.ad.responsive_search_ad.path2, "
+        "ad_group_ad.status "
+        f"FROM ad_group_ad WHERE ad_group_ad.ad.id = {ad_id} LIMIT 1"
+    )
+    rows = execute_query(config, customer_id, query)
+    if not rows:
+        return None
+
+    row = rows[0]
+    if row.get("ad_group_ad.ad.type") != "RESPONSIVE_SEARCH_AD":
+        return None
+
+    return row
+
+
+# ---------------------------------------------------------------------------
 # Draft tools — validate inputs, create a ChangePlan, return preview
 # ---------------------------------------------------------------------------
 
@@ -127,6 +164,143 @@ def draft_responsive_search_ad(
     )
     store_plan(plan)
     preview = plan.to_preview()
+    if warnings:
+        preview["warnings"] = warnings
+    return preview
+
+
+def draft_rsa_replacement(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    ad_id: str = "",
+    headlines: list[str] | None = None,
+    descriptions: list[str] | None = None,
+    final_url: str = "",
+    path1: str = "",
+    path2: str = "",
+    remove_old: bool = False,
+) -> dict:
+    """Draft an RSA replacement — creates new ad and pauses/removes the old one.
+
+    Fetches the existing ad's details, validates the new copy, and returns a
+    preview with an old-vs-new diff.  Does NOT execute until confirmed.
+    """
+    from adloop.safety.guards import SafetyViolation, check_blocked_operation
+    from adloop.safety.preview import ChangePlan, store_plan
+
+    try:
+        check_blocked_operation("replace_responsive_search_ad", config.safety)
+    except SafetyViolation as e:
+        return {"error": str(e)}
+
+    headlines = headlines or []
+    descriptions = descriptions or []
+
+    if not ad_id:
+        return {"error": "Validation failed", "details": ["ad_id is required."]}
+
+    # Fetch current ad -------------------------------------------------------
+    existing = _fetch_existing_rsa(config, customer_id, ad_id)
+    if existing is None:
+        return {
+            "error": f"Ad ID {ad_id} not found or is not a Responsive Search Ad."
+        }
+
+    old_status = existing.get("ad_group_ad.status", "")
+    if old_status == "REMOVED":
+        return {"error": f"Ad ID {ad_id} has already been removed."}
+
+    ad_group_id = str(existing.get("ad_group.id", ""))
+
+    # Inherit final_url from old ad if not provided --------------------------
+    if not final_url:
+        old_urls = existing.get("ad_group_ad.ad.final_urls", [])
+        if isinstance(old_urls, list) and old_urls:
+            final_url = old_urls[0] if isinstance(old_urls[0], str) else str(old_urls[0])
+
+    # Validate new copy ------------------------------------------------------
+    errors = _validate_rsa(ad_group_id, headlines, descriptions, final_url)
+    if errors:
+        return {"error": "Validation failed", "details": errors}
+
+    url_check = _validate_urls([final_url])
+    if url_check.get(final_url):
+        return {
+            "error": "URL validation failed",
+            "details": [
+                f"final_url '{final_url}' is not reachable: {url_check[final_url]}. "
+                f"Ads MUST point to working URLs."
+            ],
+        }
+
+    warnings: list[str] = []
+    if len(headlines) < 8:
+        warnings.append(
+            f"Only {len(headlines)} headlines provided. Google recommends 8-15 "
+            "diverse headlines for optimal RSA performance."
+        )
+    if len(descriptions) < 3:
+        warnings.append(
+            f"Only {len(descriptions)} descriptions provided. Google recommends "
+            "3-4 descriptions for optimal RSA performance."
+        )
+
+    # Build old copy for diff preview ----------------------------------------
+    old_headlines = existing.get(
+        "ad_group_ad.ad.responsive_search_ad.headlines", []
+    )
+    old_descriptions = existing.get(
+        "ad_group_ad.ad.responsive_search_ad.descriptions", []
+    )
+    # GAQL _to_python already converts AdTextAsset → str, but handle dicts defensively
+    if old_headlines and isinstance(old_headlines[0], dict):
+        old_headlines = [h.get("text", str(h)) for h in old_headlines]
+    if old_descriptions and isinstance(old_descriptions[0], dict):
+        old_descriptions = [d.get("text", str(d)) for d in old_descriptions]
+
+    old_final_urls = existing.get("ad_group_ad.ad.final_urls", [])
+    old_copy = {
+        "headlines": old_headlines,
+        "descriptions": old_descriptions,
+        "final_url": old_final_urls[0] if old_final_urls else "",
+        "path1": existing.get("ad_group_ad.ad.responsive_search_ad.path1", ""),
+        "path2": existing.get("ad_group_ad.ad.responsive_search_ad.path2", ""),
+    }
+
+    plan = ChangePlan(
+        operation="replace_responsive_search_ad",
+        entity_type="ad",
+        entity_id=ad_id,
+        customer_id=customer_id,
+        changes={
+            "old_ad_id": ad_id,
+            "ad_group_id": ad_group_id,
+            "headlines": headlines,
+            "descriptions": descriptions,
+            "final_url": final_url,
+            "path1": path1,
+            "path2": path2,
+            "remove_old": remove_old,
+            "old_copy": old_copy,
+        },
+    )
+    if remove_old:
+        plan.requires_double_confirm = True
+    store_plan(plan)
+
+    preview = plan.to_preview()
+    preview["diff"] = {
+        "old": old_copy,
+        "new": {
+            "headlines": headlines,
+            "descriptions": descriptions,
+            "final_url": final_url,
+            "path1": path1,
+            "path2": path2,
+        },
+        "old_ad_action": "REMOVE" if remove_old else "PAUSE",
+    }
     if warnings:
         preview["warnings"] = warnings
     return preview
@@ -1141,6 +1315,7 @@ def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
         "create_ad_group": _apply_create_ad_group,
         "update_campaign": _apply_update_campaign,
         "create_responsive_search_ad": _apply_create_rsa,
+        "replace_responsive_search_ad": _apply_replace_rsa,
         "add_keywords": _apply_add_keywords,
         "add_negative_keywords": _apply_add_negative_keywords,
         "pause_entity": _apply_status_change,
@@ -1546,6 +1721,56 @@ def _apply_create_rsa(client: object, cid: str, changes: dict) -> dict:
         customer_id=cid, operations=[operation]
     )
     return {"resource_name": response.results[0].resource_name}
+
+
+def _apply_replace_rsa(client: object, cid: str, changes: dict) -> dict:
+    """Create a new RSA and pause/remove the old one."""
+    # Step 1: Create the replacement ad
+    create_changes = {
+        "ad_group_id": changes["ad_group_id"],
+        "headlines": changes["headlines"],
+        "descriptions": changes["descriptions"],
+        "final_url": changes["final_url"],
+        "path1": changes.get("path1", ""),
+        "path2": changes.get("path2", ""),
+    }
+    new_ad_result = _apply_create_rsa(client, cid, create_changes)
+
+    # Step 2: Pause or remove the old ad
+    old_ad_id = changes["old_ad_id"]
+    try:
+        if changes.get("remove_old"):
+            old_ad_result = _apply_remove(client, cid, "ad", old_ad_id)
+            old_action = "REMOVED"
+        else:
+            old_ad_result = _apply_status_change(
+                client, cid, "ad", old_ad_id, "PAUSED"
+            )
+            old_action = "PAUSED"
+    except Exception as exc:
+        # New ad was already created — report partial success so user can
+        # pause the old ad manually.
+        return {
+            "new_ad": new_ad_result,
+            "old_ad": {
+                "ad_id": old_ad_id,
+                "action": "FAILED",
+                "error": (
+                    f"New ad created successfully but failed to "
+                    f"{'remove' if changes.get('remove_old') else 'pause'} "
+                    f"old ad: {exc}"
+                ),
+            },
+        }
+
+    return {
+        "new_ad": new_ad_result,
+        "old_ad": {
+            "ad_id": old_ad_id,
+            "action": old_action,
+            "result": old_ad_result,
+        },
+    }
 
 
 def _apply_add_keywords(client: object, cid: str, changes: dict) -> dict:
