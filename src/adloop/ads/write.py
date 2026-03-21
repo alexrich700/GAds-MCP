@@ -980,9 +980,9 @@ def _preflight_ad_group_checks(
 
     Checks performed:
     1. Campaign must be a SEARCH campaign (error if not).
-    2. Warn if an ad group with the same name already exists in the campaign.
-    3. Warn if cpc_bid_micros is set but campaign uses Smart Bidding (ignored).
-    4. Warn if BROAD match keywords + non-Smart Bidding campaign.
+    2. Warn if cpc_bid_micros is set but campaign uses Smart Bidding (ignored).
+    3. Warn if BROAD match keywords + non-Smart Bidding campaign.
+    4. Warn if an ad group with the same name already exists in the campaign.
     """
     errors: list[str] = []
     warnings: list[str] = []
@@ -1018,7 +1018,7 @@ def _preflight_ad_group_checks(
                 "draft_ad_group only supports SEARCH campaigns."
             )
 
-        # Check 3: cpc_bid_micros on Smart Bidding is ignored
+        # Check 2: cpc_bid_micros on Smart Bidding is ignored
         if cpc_bid_micros and bidding in _SMART_BIDDING_STRATEGIES:
             warnings.append(
                 f"Campaign '{campaign_name}' uses {bidding} (Smart Bidding). "
@@ -1026,7 +1026,7 @@ def _preflight_ad_group_checks(
                 "sets bids automatically."
             )
 
-        # Check 4: BROAD match + non-Smart Bidding
+        # Check 3: BROAD match + non-Smart Bidding
         has_broad = any(
             kw.get("match_type", "").upper() == "BROAD" for kw in keywords
         )
@@ -1040,7 +1040,7 @@ def _preflight_ad_group_checks(
                 f"to Smart Bidding first."
             )
 
-        # Query 2: existing ad groups (duplicate name check)
+        # Check 4: existing ad groups (duplicate name check)
         ag_query = f"""
             SELECT ad_group.name
             FROM ad_group

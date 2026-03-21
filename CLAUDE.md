@@ -17,7 +17,7 @@ python scripts/sync-rules.py  # Sync rules: .cursor/rules/ -> .claude/rules/
 ```
 src/adloop/
 ├── __init__.py        # Entry point — routes 'adloop init' vs MCP server
-├── server.py          # FastMCP server — 27 tool registrations
+├── server.py          # FastMCP server — 29 tool registrations
 ├── config.py          # Config loader (~/.adloop/config.yaml)
 ├── auth.py            # OAuth 2.0 + service account + token refresh
 ├── cli.py             # Interactive setup wizard
@@ -34,7 +34,7 @@ All tool usage rules, safety protocols, orchestration patterns, GAQL reference, 
 
 **Read and follow `.claude/rules/adloop.md` for all AdLoop MCP tool orchestration.**
 
-That file is the complete guide for combining AdLoop's 27 tools. It covers:
+That file is the complete guide for combining AdLoop's 29 tools. It covers:
 - Tool inventory with parameters and when to use each
 - 8 safety rules (budget caps, dry-run defaults, Broad Match prevention, pre-write validation)
 - 12 orchestration patterns (performance review, ad creation, tracking diagnosis, etc.)
