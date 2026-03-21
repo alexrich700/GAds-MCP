@@ -45,6 +45,48 @@ check_warn() {
 }
 
 # -------------------------------------------
+# Helper: Find a suitable Python 3.11+
+# Checks versioned commands, Homebrew paths, then generic python3
+# -------------------------------------------
+find_python() {
+    for cmd in python3.13 python3.12 python3.11; do
+        if command -v "$cmd" &> /dev/null; then
+            local ver
+            ver=$("$cmd" --version 2>&1 | awk '{print $2}')
+            local minor
+            minor=$(echo "$ver" | cut -d. -f2)
+            if [[ "$minor" -ge 11 ]]; then
+                echo "$cmd"
+                return 0
+            fi
+        fi
+    done
+    for brew_cmd in /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 /usr/local/bin/python3.13 /usr/local/bin/python3.12 /usr/local/bin/python3.11; do
+        if [[ -x "$brew_cmd" ]]; then
+            local ver
+            ver=$("$brew_cmd" --version 2>&1 | awk '{print $2}')
+            local minor
+            minor=$(echo "$ver" | cut -d. -f2)
+            if [[ "$minor" -ge 11 ]]; then
+                echo "$brew_cmd"
+                return 0
+            fi
+        fi
+    done
+    if command -v python3 &> /dev/null; then
+        local ver
+        ver=$(python3 --version 2>&1 | awk '{print $2}')
+        local minor
+        minor=$(echo "$ver" | cut -d. -f2)
+        if [[ "$minor" -ge 11 ]]; then
+            echo "python3"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# -------------------------------------------
 # 1. Operating System
 # -------------------------------------------
 echo "Checking operating system..."
@@ -79,28 +121,18 @@ fi
 # 3. Python 3.11+
 # -------------------------------------------
 echo "Checking Python..."
-if command -v python3 &> /dev/null; then
-    PY_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
-    PY_MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
-    PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
+FOUND_PYTHON=$(find_python || true)
 
-    if [[ "$PY_MAJOR" -ge 3 ]] && [[ "$PY_MINOR" -ge 11 ]]; then
-        check_pass "Python $PY_VERSION (3.11+ required)"
-    else
-        check_fail "Python $PY_VERSION found, but 3.11+ is required"
-        echo ""
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            echo -e "         ${BLUE}Fix: Run this command, then re-run the pre-flight check:${NC}"
-            echo ""
-            echo "         brew install python@3.12"
-            echo ""
-        else
-            echo -e "         ${BLUE}Fix: Install Python 3.12 from https://www.python.org/downloads/${NC}"
-            echo ""
-        fi
-    fi
+if [[ -n "$FOUND_PYTHON" ]]; then
+    PY_VERSION=$("$FOUND_PYTHON" --version 2>&1 | awk '{print $2}')
+    check_pass "Python $PY_VERSION found at: $FOUND_PYTHON"
 else
-    check_fail "Python 3 not found"
+    if command -v python3 &> /dev/null; then
+        OLD_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
+        check_fail "Python $OLD_VERSION found, but 3.11+ is required"
+    else
+        check_fail "Python 3 not found"
+    fi
     echo ""
     if [[ "$OSTYPE" == "darwin"* ]]; then
         echo -e "         ${BLUE}Fix: Run this command, then re-run the pre-flight check:${NC}"
