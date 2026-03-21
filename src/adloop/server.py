@@ -624,6 +624,47 @@ def draft_responsive_search_ad(
 
 @mcp.tool(annotations=_WRITE)
 @_safe
+def draft_rsa_replacement(
+    ad_id: str,
+    headlines: list[str],
+    descriptions: list[str],
+    final_url: str = "",
+    customer_id: str = "",
+    path1: str = "",
+    path2: str = "",
+    remove_old: bool = True,
+) -> dict:
+    """Fix an existing RSA — creates a corrected replacement and removes the old ad.
+
+    Use this to fix issues with an existing RSA: wrong copy, character errors,
+    data inconsistencies, truncated names, etc. The old ad is REMOVED by default
+    so it cannot be accidentally re-enabled.
+
+    For A/B testing or adding ad variants, use draft_responsive_search_ad instead.
+
+    Provide the ad_id of the RSA to fix, plus the complete corrected copy.
+    The tool fetches the old ad's details and shows a side-by-side diff preview.
+    The new ad inherits the ad group from the old one and is created as PAUSED.
+    If final_url is omitted, the old ad's URL is reused.
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.write import draft_rsa_replacement as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        ad_id=ad_id,
+        headlines=headlines,
+        descriptions=descriptions,
+        final_url=final_url,
+        path1=path1,
+        path2=path2,
+        remove_old=remove_old,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
 def draft_keywords(
     ad_group_id: str,
     keywords: list[dict],
