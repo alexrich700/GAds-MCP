@@ -372,6 +372,66 @@ def draft_campaign(
     return preview
 
 
+def draft_ad_group(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    campaign_id: str = "",
+    ad_group_name: str = "",
+    keywords: list[dict] | None = None,
+    cpc_bid_micros: int = 0,
+) -> dict:
+    """Draft a new ad group within an existing campaign — returns preview.
+
+    Creates: AdGroup (ENABLED, SEARCH_STANDARD) + optional Keywords.
+    Ads are NOT included — use draft_responsive_search_ad separately
+    after the ad group is created.
+
+    cpc_bid_micros: Optional ad-group-level CPC bid in micros. Only relevant
+        for campaigns using MANUAL_CPC bidding.
+    """
+    from adloop.safety.guards import SafetyViolation, check_blocked_operation
+    from adloop.safety.preview import ChangePlan, store_plan
+
+    try:
+        check_blocked_operation("create_ad_group", config.safety)
+    except SafetyViolation as e:
+        return {"error": str(e)}
+
+    errors = _validate_ad_group(
+        campaign_id=campaign_id,
+        ad_group_name=ad_group_name,
+        keywords=keywords,
+        cpc_bid_micros=cpc_bid_micros,
+    )
+    if errors:
+        return {"error": "Validation failed", "details": errors}
+
+    warnings: list[str] = []
+    keywords = keywords or []
+    if keywords:
+        warnings = _check_broad_match_safety_by_campaign(
+            config, customer_id, campaign_id, keywords
+        )
+
+    plan = ChangePlan(
+        operation="create_ad_group",
+        entity_type="ad_group",
+        customer_id=customer_id,
+        changes={
+            "campaign_id": campaign_id,
+            "ad_group_name": ad_group_name,
+            "keywords": keywords,
+            "cpc_bid_micros": cpc_bid_micros,
+        },
+    )
+    store_plan(plan)
+    preview = plan.to_preview()
+    if warnings:
+        preview["warnings"] = warnings
+    return preview
+
+
 def update_campaign(
     config: AdLoopConfig,
     *,
@@ -878,6 +938,77 @@ def _validate_keywords(ad_group_id: str, keywords: list[dict]) -> list[str]:
     return errors
 
 
+def _validate_ad_group(
+    *,
+    campaign_id: str,
+    ad_group_name: str,
+    keywords: list[dict] | None,
+    cpc_bid_micros: int,
+) -> list[str]:
+    """Validate inputs for draft_ad_group."""
+    errors = []
+    if not campaign_id:
+        errors.append("campaign_id is required")
+    if not ad_group_name or not ad_group_name.strip():
+        errors.append("ad_group_name is required")
+    if cpc_bid_micros < 0:
+        errors.append("cpc_bid_micros must be >= 0")
+    if keywords:
+        for i, kw in enumerate(keywords):
+            if not kw.get("text"):
+                errors.append(f"Keyword {i + 1} has no text")
+            mt = kw.get("match_type", "").upper()
+            if mt not in _VALID_MATCH_TYPES:
+                errors.append(
+                    f"Keyword {i + 1} has invalid match_type '{mt}' "
+                    "(must be EXACT, PHRASE, or BROAD)"
+                )
+    return errors
+
+
+def _check_broad_match_safety_by_campaign(
+    config: AdLoopConfig,
+    customer_id: str,
+    campaign_id: str,
+    keywords: list[dict],
+) -> list[str]:
+    """Warn if BROAD match keywords target a non-Smart Bidding campaign (by campaign_id)."""
+    has_broad = any(
+        kw.get("match_type", "").upper() == "BROAD" for kw in keywords
+    )
+    if not has_broad:
+        return []
+
+    try:
+        from adloop.ads.gaql import execute_query
+
+        query = f"""
+            SELECT campaign.bidding_strategy_type, campaign.name
+            FROM campaign
+            WHERE campaign.id = {campaign_id}
+        """
+        rows = execute_query(config, customer_id, query)
+        if not rows:
+            return []
+
+        bidding = rows[0].get("campaign.bidding_strategy_type", "")
+        campaign_name = rows[0].get("campaign.name", "")
+
+        if bidding not in _SMART_BIDDING_STRATEGIES:
+            return [
+                f"DANGEROUS: Adding BROAD match keywords to campaign "
+                f"'{campaign_name}' which uses {bidding} bidding. "
+                f"Broad Match without Smart Bidding (tCPA/tROAS/Maximize Conversions) "
+                f"leads to irrelevant matches and wasted budget. "
+                f"Use PHRASE or EXACT match instead, or switch the campaign "
+                f"to Smart Bidding first."
+            ]
+    except Exception:
+        pass
+
+    return []
+
+
 def _draft_status_change(
     config: AdLoopConfig,
     operation: str,
@@ -929,6 +1060,7 @@ def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
 
     dispatch = {
         "create_campaign": _apply_create_campaign,
+        "create_ad_group": _apply_create_ad_group,
         "update_campaign": _apply_update_campaign,
         "create_responsive_search_ad": _apply_create_rsa,
         "add_keywords": _apply_add_keywords,
@@ -1091,6 +1223,54 @@ def _apply_create_campaign(client: object, cid: str, changes: dict) -> dict:
                 results.setdefault("geo_targets", []).append(resource)
             else:
                 results.setdefault("language_targets", []).append(resource)
+
+    return results
+
+
+def _apply_create_ad_group(client: object, cid: str, changes: dict) -> dict:
+    """Create ad group + optional keywords in an existing campaign atomically."""
+    service = client.get_service("GoogleAdsService")
+    campaign_service = client.get_service("CampaignService")
+    ad_group_service = client.get_service("AdGroupService")
+
+    operations: list = []
+
+    # 1. AdGroup (temp ID: -1, references existing campaign)
+    ag_op = client.get_type("MutateOperation")
+    ad_group = ag_op.ad_group_operation.create
+    ad_group.resource_name = ad_group_service.ad_group_path(cid, "-1")
+    ad_group.name = changes["ad_group_name"]
+    ad_group.campaign = campaign_service.campaign_path(cid, changes["campaign_id"])
+    ad_group.status = client.enums.AdGroupStatusEnum.ENABLED
+    ad_group.type_ = client.enums.AdGroupTypeEnum.SEARCH_STANDARD
+    if changes.get("cpc_bid_micros"):
+        ad_group.cpc_bid_micros = changes["cpc_bid_micros"]
+    operations.append(ag_op)
+
+    # 2. Keywords (reference ad_group -1)
+    kw_list = changes.get("keywords") or []
+    for kw in kw_list:
+        kw_op = client.get_type("MutateOperation")
+        criterion = kw_op.ad_group_criterion_operation.create
+        criterion.ad_group = ad_group_service.ad_group_path(cid, "-1")
+        criterion.keyword.text = kw["text"]
+        criterion.keyword.match_type = getattr(
+            client.enums.KeywordMatchTypeEnum, kw["match_type"].upper()
+        )
+        operations.append(kw_op)
+
+    response = service.mutate(customer_id=cid, mutate_operations=operations)
+
+    results: dict = {}
+    for i, resp in enumerate(response.mutate_operation_responses):
+        resp_type = resp.WhichOneof("response")
+        if resp_type:
+            inner = getattr(resp, resp_type)
+            resource = getattr(inner, "resource_name", str(inner))
+            if i == 0:
+                results["ad_group"] = resource
+            else:
+                results.setdefault("keywords", []).append(resource)
 
     return results
 
