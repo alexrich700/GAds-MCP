@@ -124,10 +124,27 @@ def _to_python(obj: object) -> object:
         return [_to_python(item) for item in obj]
     except TypeError:
         pass
-    # AdTextAsset and similar message types
+    # AdTextAsset and similar message types — preserve pinning info
     if hasattr(obj, "text") and isinstance(getattr(obj, "text", None), str):
+        pinned = getattr(obj, "pinned_field", None)
+        if pinned is not None:
+            # Proto-plus enums are int subclasses with a .name attribute;
+            # 0 / UNSPECIFIED means "not pinned".
+            pin_name = getattr(pinned, "name", None)
+            if pin_name is not None and pin_name != "UNSPECIFIED":
+                return {"text": obj.text, "pinned_to": pin_name}
+            if isinstance(pinned, int) and pinned != 0:
+                return {"text": obj.text, "pinned_to": str(pinned)}
         return obj.text
     return str(obj)
+
+
+def _format_asset_item(v: object) -> str:
+    """Format a single list item, rendering pinned AdTextAsset dicts nicely."""
+    if isinstance(v, dict) and "text" in v:
+        pinned = v.get("pinned_to")
+        return f"{v['text']} [{pinned}]" if pinned else v["text"]
+    return str(v)
 
 
 def _format_table(rows: list[dict], query: str) -> dict:
@@ -144,7 +161,7 @@ def _format_table(rows: list[dict], query: str) -> dict:
         for h in headers:
             val = row.get(h)
             if isinstance(val, list):
-                s = ", ".join(str(v) for v in val)
+                s = ", ".join(_format_asset_item(v) for v in val)
             else:
                 s = str(val) if val is not None else ""
             sr[h] = s
@@ -173,6 +190,6 @@ def _format_csv(rows: list[dict], query: str) -> dict:
     writer = csv.DictWriter(output, fieldnames=rows[0].keys())
     writer.writeheader()
     for row in rows:
-        writer.writerow({k: v if not isinstance(v, list) else "; ".join(str(i) for i in v) for k, v in row.items()})
+        writer.writerow({k: v if not isinstance(v, list) else "; ".join(_format_asset_item(i) for i in v) for k, v in row.items()})
 
     return {"csv": output.getvalue(), "row_count": len(rows), "query": query}

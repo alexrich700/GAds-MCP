@@ -871,8 +871,8 @@ def update_campaign(
 @_safe
 def draft_responsive_search_ad(
     ad_group_id: str,
-    headlines: list[str],
-    descriptions: list[str],
+    headlines: list[str | dict],
+    descriptions: list[str | dict],
     final_url: str,
     customer_id: str = "",
     path1: str = "",
@@ -882,6 +882,12 @@ def draft_responsive_search_ad(
 
     Provide 3-15 headlines (max 30 chars each) and 2-4 descriptions (max 90 chars each).
     The preview shows exactly what will be created. Call confirm_and_apply to execute.
+
+    Each headline/description can be a plain string (unpinned) or a dict with
+    optional pinning: {"text": "...", "pinned_to": "HEADLINE_1"}.
+    Valid headline pins: HEADLINE_1, HEADLINE_2, HEADLINE_3.
+    Valid description pins: DESCRIPTION_1, DESCRIPTION_2.
+    Multiple assets can be pinned to the same position (they rotate).
     """
     from adloop.ads.write import draft_responsive_search_ad as _impl
 
@@ -901,8 +907,8 @@ def draft_responsive_search_ad(
 @_safe
 def draft_rsa_replacement(
     ad_id: str,
-    headlines: list[str],
-    descriptions: list[str],
+    headlines: list[str | dict],
+    descriptions: list[str | dict],
     final_url: str = "",
     customer_id: str = "",
     path1: str = "",
@@ -922,6 +928,11 @@ def draft_rsa_replacement(
     The new ad inherits the ad group from the old one and is created as PAUSED.
     If final_url is omitted, the old ad's URL is reused.
     Call confirm_and_apply with the returned plan_id to execute.
+
+    Each headline/description can be a plain string (unpinned) or a dict with
+    optional pinning: {"text": "...", "pinned_to": "HEADLINE_1"}.
+    Valid headline pins: HEADLINE_1, HEADLINE_2, HEADLINE_3.
+    Valid description pins: DESCRIPTION_1, DESCRIPTION_2.
     """
     from adloop.ads.write import draft_rsa_replacement as _impl
 
