@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from adloop.config import AdLoopConfig, AdsConfig, GA4Config, SafetyConfig
-from adloop.crossref import analyze_campaign_conversions
+from adloop.crossref import analyze_campaign_conversions, landing_page_analysis
 
 
 @pytest.fixture
@@ -165,3 +165,47 @@ class TestAnalyzeCampaignConversions:
 
         assert len(result["campaigns"]) == 1
         assert result["campaigns"][0]["campaign_name"] == "Campaign A"
+
+
+class TestLandingPageAnalysis:
+    @patch("adloop.ga4.reports.run_ga4_report")
+    @patch("adloop.ads.read.get_ad_performance")
+    def test_trailing_slash_matching(self, mock_ads, mock_ga4, config):
+        """Ad URLs with trailing slashes should match GA4 paths with trailing slashes."""
+        mock_ads.return_value = {
+            "ads": [
+                {
+                    "ad_group_ad.ad.id": 1,
+                    "ad_group_ad.ad.final_urls": ["https://example.com/locations/plano-tx/"],
+                    "campaign.name": "City Search",
+                    "ad_group.name": "Plano",
+                    "metrics.clicks": 87,
+                    "metrics.cost": 45.0,
+                },
+            ],
+        }
+        mock_ga4.return_value = {
+            "rows": [
+                {
+                    "pagePath": "/locations/plano-tx/",
+                    "sessionSource": "google",
+                    "sessionMedium": "cpc",
+                    "sessions": "88",
+                    "conversions": "5",
+                    "engagedSessions": "70",
+                    "bounceRate": "0.2",
+                },
+            ],
+        }
+
+        result = landing_page_analysis(
+            config, customer_id="1234567890", property_id="properties/123456"
+        )
+
+        # Should merge into a single path, not create two separate entries
+        assert len(result["landing_pages"]) == 1
+        page = result["landing_pages"][0]
+        assert page["total_ad_clicks"] == 87
+        assert page["ga4_paid_sessions"] == 88
+        # Should NOT be flagged as orphaned
+        assert len(result.get("orphaned_urls", [])) == 0

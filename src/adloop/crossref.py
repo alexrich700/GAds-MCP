@@ -256,6 +256,7 @@ def landing_page_analysis(
         if source != "google" or medium != "cpc":
             continue
         path = row.get("pagePath", "/")
+        path = path.rstrip("/") or "/"
         bucket = ga4_by_path.setdefault(path, {
             "sessions": 0, "conversions": 0, "engaged": 0, "bounce_rate_sum": 0.0, "count": 0,
         })
