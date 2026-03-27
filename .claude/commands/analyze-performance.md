@@ -28,6 +28,10 @@ If conversion issues found: run `attribution_check`
 If landing page problems suspected: run `landing_page_analysis`
 If quality scores are low: run `get_quality_score_details` for component breakdowns
 If device performance varies: run `get_device_performance` to compare mobile vs desktop
+If performance changed unexpectedly: run `get_change_history` to correlate with account changes
+If geographic waste suspected: run `get_location_performance` to identify underperforming areas
+If timing patterns matter: run `get_ad_schedule_performance` for hour/day analysis
+If competitive context needed: run `get_auction_insights` (requires allowlisted account)
 
 ## 3. Present results
 

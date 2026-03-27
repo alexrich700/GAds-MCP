@@ -287,8 +287,6 @@ def get_change_history(
     """Get account change history from the change_event resource."""
     from adloop.ads.gaql import execute_query
 
-    date_clause = _change_event_date_clause(date_range_start, date_range_end)
-
     resource_filter = ""
     if resource_type:
         resource_filter = (
@@ -301,6 +299,15 @@ def get_change_history(
             f"AND change_event.resource_change_operation = '{operation_type}'"
         )
 
+    # change_event uses change_date_time, not segments.date.
+    if date_range_start and date_range_end:
+        date_where = (
+            f"change_event.change_date_time BETWEEN "
+            f"'{date_range_start}' AND '{date_range_end}'"
+        )
+    else:
+        date_where = "change_event.change_date_time DURING LAST_14_DAYS"
+
     query = f"""
         SELECT change_event.change_date_time,
                change_event.user_email,
@@ -311,32 +318,12 @@ def get_change_history(
                change_event.new_resource,
                change_event.resource_name
         FROM change_event
-        WHERE change_event.change_date_time DURING LAST_14_DAYS
-          {date_clause}
+        WHERE {date_where}
           {resource_filter}
           {operation_filter}
         ORDER BY change_event.change_date_time DESC
         LIMIT {limit}
     """
-
-    # If explicit dates given, replace the default DURING clause
-    if date_range_start and date_range_end:
-        query = f"""
-            SELECT change_event.change_date_time,
-                   change_event.user_email,
-                   change_event.change_resource_type,
-                   change_event.resource_change_operation,
-                   change_event.changed_fields,
-                   change_event.old_resource,
-                   change_event.new_resource,
-                   change_event.resource_name
-            FROM change_event
-            WHERE change_event.change_date_time BETWEEN '{date_range_start}' AND '{date_range_end}'
-              {resource_filter}
-              {operation_filter}
-            ORDER BY change_event.change_date_time DESC
-            LIMIT {limit}
-        """
 
     rows = execute_query(config, customer_id, query)
     return {"changes": rows, "total_changes": len(rows)}
@@ -686,12 +673,6 @@ def _date_clause(start: str, end: str) -> str:
         return f"AND segments.date BETWEEN '{start}' AND '{end}'"
     return "AND segments.date DURING LAST_30_DAYS"
 
-
-def _change_event_date_clause(start: str, end: str) -> str:
-    """Build a date clause for the change_event resource."""
-    if start and end:
-        return f"AND change_event.change_date_time BETWEEN '{start}' AND '{end}'"
-    return "AND change_event.change_date_time DURING LAST_14_DAYS"
 
 
 def _enrich_cost_fields(rows: list[dict]) -> None:
