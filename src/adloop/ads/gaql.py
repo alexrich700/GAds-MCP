@@ -124,8 +124,17 @@ def _to_python(obj: object) -> object:
         return [_to_python(item) for item in obj]
     except TypeError:
         pass
-    # AdTextAsset and similar message types
+    # AdTextAsset and similar message types — preserve pinning info
     if hasattr(obj, "text") and isinstance(getattr(obj, "text", None), str):
+        pinned = getattr(obj, "pinned_field", None)
+        if pinned is not None:
+            # Proto-plus enums are int subclasses with a .name attribute;
+            # 0 / UNSPECIFIED means "not pinned".
+            pin_name = getattr(pinned, "name", None)
+            if pin_name and pin_name != "UNSPECIFIED":
+                return {"text": obj.text, "pinned_to": pin_name}
+            if isinstance(pinned, int) and pinned != 0:
+                return {"text": obj.text, "pinned_to": str(pinned)}
         return obj.text
     return str(obj)
 

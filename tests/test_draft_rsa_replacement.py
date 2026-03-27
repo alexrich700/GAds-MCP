@@ -74,10 +74,13 @@ class TestDraftRsaReplacement:
         assert "plan_id" in result
         assert result["operation"] == "replace_responsive_search_ad"
         assert "diff" in result
-        assert result["diff"]["old"]["headlines"] == EXISTING_RSA[
-            "ad_group_ad.ad.responsive_search_ad.headlines"
+        assert result["diff"]["old"]["headlines"] == [
+            {"text": h, "pinned_to": None}
+            for h in EXISTING_RSA["ad_group_ad.ad.responsive_search_ad.headlines"]
         ]
-        assert result["diff"]["new"]["headlines"] == VALID_HEADLINES
+        assert result["diff"]["new"]["headlines"] == [
+            {"text": h, "pinned_to": None} for h in VALID_HEADLINES
+        ]
         assert result["diff"]["old_ad_action"] == "REMOVE"
 
         # Verify plan stored correctly
@@ -264,7 +267,8 @@ class TestDraftRsaReplacement:
         )
         plan = get_plan(result["plan_id"])
         assert "old_copy" in plan.changes
-        assert plan.changes["old_copy"]["headlines"] == EXISTING_RSA[
-            "ad_group_ad.ad.responsive_search_ad.headlines"
+        assert plan.changes["old_copy"]["headlines"] == [
+            {"text": h, "pinned_to": None}
+            for h in EXISTING_RSA["ad_group_ad.ad.responsive_search_ad.headlines"]
         ]
         remove_plan(result["plan_id"])

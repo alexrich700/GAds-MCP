@@ -105,8 +105,8 @@ def draft_responsive_search_ad(
     *,
     customer_id: str = "",
     ad_group_id: str = "",
-    headlines: list[str] | None = None,
-    descriptions: list[str] | None = None,
+    headlines: list[str | dict] | None = None,
+    descriptions: list[str | dict] | None = None,
     final_url: str = "",
     path1: str = "",
     path2: str = "",
@@ -120,8 +120,8 @@ def draft_responsive_search_ad(
     except SafetyViolation as e:
         return {"error": str(e)}
 
-    headlines = headlines or []
-    descriptions = descriptions or []
+    headlines = _normalize_assets(headlines or [])
+    descriptions = _normalize_assets(descriptions or [])
 
     errors = _validate_rsa(ad_group_id, headlines, descriptions, final_url)
     if errors:
@@ -174,8 +174,8 @@ def draft_rsa_replacement(
     *,
     customer_id: str = "",
     ad_id: str = "",
-    headlines: list[str] | None = None,
-    descriptions: list[str] | None = None,
+    headlines: list[str | dict] | None = None,
+    descriptions: list[str | dict] | None = None,
     final_url: str = "",
     path1: str = "",
     path2: str = "",
@@ -201,8 +201,8 @@ def draft_rsa_replacement(
     except SafetyViolation as e:
         return {"error": str(e)}
 
-    headlines = headlines or []
-    descriptions = descriptions or []
+    headlines = _normalize_assets(headlines or [])
+    descriptions = _normalize_assets(descriptions or [])
 
     if not ad_id:
         return {"error": "Validation failed", "details": ["ad_id is required."]}
@@ -260,11 +260,10 @@ def draft_rsa_replacement(
     old_descriptions = existing.get(
         "ad_group_ad.ad.responsive_search_ad.descriptions", []
     )
-    # GAQL _to_python already converts AdTextAsset → str, but handle dicts defensively
-    if old_headlines and isinstance(old_headlines[0], dict):
-        old_headlines = [h.get("text", str(h)) for h in old_headlines]
-    if old_descriptions and isinstance(old_descriptions[0], dict):
-        old_descriptions = [d.get("text", str(d)) for d in old_descriptions]
+    # Normalize old assets to the same dict format used for new copy so
+    # the diff preview consistently shows pinning info.
+    old_headlines = _normalize_assets(old_headlines)
+    old_descriptions = _normalize_assets(old_descriptions)
 
     old_final_urls = existing.get("ad_group_ad.ad.final_urls", [])
     old_copy = {
@@ -994,10 +993,30 @@ def _check_broad_match_safety(
     return []
 
 
+_VALID_HEADLINE_PINS = {None, "HEADLINE_1", "HEADLINE_2", "HEADLINE_3"}
+_VALID_DESCRIPTION_PINS = {None, "DESCRIPTION_1", "DESCRIPTION_2"}
+
+
+def _normalize_assets(items: list[str | dict]) -> list[dict]:
+    """Normalize a mixed ``str | dict`` asset list to uniform dicts.
+
+    Each returned dict has ``{"text": str, "pinned_to": str | None}``.
+    """
+    result: list[dict] = []
+    for item in items:
+        if isinstance(item, str):
+            result.append({"text": item, "pinned_to": None})
+        elif isinstance(item, dict):
+            result.append({"text": item.get("text", ""), "pinned_to": item.get("pinned_to")})
+        else:
+            result.append({"text": str(item), "pinned_to": None})
+    return result
+
+
 def _validate_rsa(
     ad_group_id: str,
-    headlines: list[str],
-    descriptions: list[str],
+    headlines: list[dict],
+    descriptions: list[dict],
     final_url: str,
 ) -> list[str]:
     errors = []
@@ -1014,11 +1033,29 @@ def _validate_rsa(
     if len(descriptions) > 4:
         errors.append(f"Maximum 4 descriptions, got {len(descriptions)}")
     for i, h in enumerate(headlines):
-        if len(h) > 30:
-            errors.append(f"Headline {i + 1} exceeds 30 chars ({len(h)}): '{h}'")
+        text = h.get("text", "")
+        if not text:
+            errors.append(f"Headline {i + 1} is missing required 'text' field.")
+        elif len(text) > 30:
+            errors.append(f"Headline {i + 1} exceeds 30 chars ({len(text)}): '{text}'")
+        pin = h.get("pinned_to")
+        if pin not in _VALID_HEADLINE_PINS:
+            errors.append(
+                f"Headline {i + 1} has invalid pinned_to '{pin}'. "
+                "Must be HEADLINE_1, HEADLINE_2, or HEADLINE_3."
+            )
     for i, d in enumerate(descriptions):
-        if len(d) > 90:
-            errors.append(f"Description {i + 1} exceeds 90 chars ({len(d)}): '{d}'")
+        text = d.get("text", "")
+        if not text:
+            errors.append(f"Description {i + 1} is missing required 'text' field.")
+        elif len(text) > 90:
+            errors.append(f"Description {i + 1} exceeds 90 chars ({len(text)}): '{text}'")
+        pin = d.get("pinned_to")
+        if pin not in _VALID_DESCRIPTION_PINS:
+            errors.append(
+                f"Description {i + 1} has invalid pinned_to '{pin}'. "
+                "Must be DESCRIPTION_1 or DESCRIPTION_2."
+            )
     return errors
 
 
@@ -1709,14 +1746,28 @@ def _apply_create_rsa(client: object, cid: str, changes: dict) -> dict:
     ad = ad_group_ad.ad
     ad.final_urls.append(changes["final_url"])
 
-    for text in changes["headlines"]:
+    for item in changes["headlines"]:
         asset = client.get_type("AdTextAsset")
-        asset.text = text
+        if isinstance(item, str):
+            asset.text = item
+        else:
+            asset.text = item["text"]
+            if item.get("pinned_to"):
+                asset.pinned_field = client.enums.ServedAssetFieldTypeEnum[
+                    item["pinned_to"]
+                ]
         ad.responsive_search_ad.headlines.append(asset)
 
-    for text in changes["descriptions"]:
+    for item in changes["descriptions"]:
         asset = client.get_type("AdTextAsset")
-        asset.text = text
+        if isinstance(item, str):
+            asset.text = item
+        else:
+            asset.text = item["text"]
+            if item.get("pinned_to"):
+                asset.pinned_field = client.enums.ServedAssetFieldTypeEnum[
+                    item["pinned_to"]
+                ]
         ad.responsive_search_ad.descriptions.append(asset)
 
     if changes.get("path1"):
