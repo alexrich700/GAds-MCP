@@ -1753,9 +1753,9 @@ def _apply_create_rsa(client: object, cid: str, changes: dict) -> dict:
         else:
             asset.text = item["text"]
             if item.get("pinned_to"):
-                asset.pinned_field = client.enums.ServedAssetFieldTypeEnum[
-                    item["pinned_to"]
-                ]
+                asset.pinned_field = getattr(
+                    client.enums.ServedAssetFieldTypeEnum, item["pinned_to"]
+                )
         ad.responsive_search_ad.headlines.append(asset)
 
     for item in changes["descriptions"]:
@@ -1765,9 +1765,9 @@ def _apply_create_rsa(client: object, cid: str, changes: dict) -> dict:
         else:
             asset.text = item["text"]
             if item.get("pinned_to"):
-                asset.pinned_field = client.enums.ServedAssetFieldTypeEnum[
-                    item["pinned_to"]
-                ]
+                asset.pinned_field = getattr(
+                    client.enums.ServedAssetFieldTypeEnum, item["pinned_to"]
+                )
         ad.responsive_search_ad.descriptions.append(asset)
 
     if changes.get("path1"):
