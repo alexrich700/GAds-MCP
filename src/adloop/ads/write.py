@@ -1007,7 +1007,8 @@ def _normalize_assets(items: list[str | dict]) -> list[dict]:
         if isinstance(item, str):
             result.append({"text": item, "pinned_to": None})
         elif isinstance(item, dict):
-            result.append({"text": item.get("text", ""), "pinned_to": item.get("pinned_to")})
+            raw_text = item.get("text", "")
+            result.append({"text": str(raw_text) if raw_text is not None else "", "pinned_to": item.get("pinned_to")})
         else:
             result.append({"text": str(item), "pinned_to": None})
     return result

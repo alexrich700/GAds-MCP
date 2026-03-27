@@ -313,6 +313,15 @@ class TestNormalizeAssets:
     def test_empty_list(self):
         assert _normalize_assets([]) == []
 
+    def test_non_string_text_coerced(self):
+        """Non-string text values (e.g. int) should be coerced to str."""
+        result = _normalize_assets([
+            {"text": 123, "pinned_to": "HEADLINE_1"},
+            {"text": None},
+        ])
+        assert result[0] == {"text": "123", "pinned_to": "HEADLINE_1"}
+        assert result[1] == {"text": "", "pinned_to": None}
+
 
 class TestValidateRsaPinning:
     """Tests for pinning validation in _validate_rsa."""
