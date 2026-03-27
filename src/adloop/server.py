@@ -338,6 +338,258 @@ def get_negative_keywords(
     )
 
 
+# ---------------------------------------------------------------------------
+# Google Ads Insights Tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_impression_share(
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+    level: str = "campaign",
+) -> dict:
+    """Get impression share metrics — how much of available search traffic you're capturing.
+
+    Shows search impression share, budget-lost share, rank-lost share,
+    top impression share, and absolute top impression share.
+
+    level: "campaign" (default), "ad_group", or "keyword"
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.read import get_impression_share as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        level=level,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_change_history(
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+    resource_type: str = "",
+    operation_type: str = "",
+    limit: int = 100,
+) -> dict:
+    """Get recent account change history — who changed what and when.
+
+    Critical for correlating performance shifts with account changes.
+    Goes back up to 30 days (API limit). Default shows last 14 days.
+
+    resource_type: filter by type — "CAMPAIGN", "AD_GROUP", "AD",
+        "AD_GROUP_CRITERION", "CAMPAIGN_BUDGET", "BIDDING_STRATEGY"
+    operation_type: filter by action — "CREATE", "UPDATE", "REMOVE"
+    Date format: "YYYY-MM-DD". Empty = last 14 days.
+    """
+    from adloop.ads.read import get_change_history as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        resource_type=resource_type,
+        operation_type=operation_type,
+        limit=limit,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_device_performance(
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+    level: str = "campaign",
+) -> dict:
+    """Get performance segmented by device — MOBILE, DESKTOP, TABLET.
+
+    Essential for local service businesses where mobile intent differs
+    dramatically from desktop. Shows clicks, cost, conversions, and
+    conversion rate per device.
+
+    level: "campaign" (default) or "ad_group"
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.read import get_device_performance as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        level=level,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_location_performance(
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+) -> dict:
+    """Get performance segmented by geographic location.
+
+    Shows impressions, clicks, cost, and conversions per location.
+    Useful for identifying underperforming service areas or wasted spend
+    outside the target service radius.
+
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.read import get_location_performance as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_quality_score_details(
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """Get keyword Quality Score with component breakdowns.
+
+    Returns quality_score (1-10), creative_quality_score (ad relevance),
+    post_click_quality_score (landing page), and search_predicted_ctr
+    (expected CTR). Sorted by spend so high-cost low-QS keywords surface first.
+
+    campaign_id: optional filter to a specific campaign.
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.read import get_quality_score_details as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        campaign_id=campaign_id,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_bid_strategy_status(
+    customer_id: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """Get bid strategy type, system status, and learning state per campaign.
+
+    Shows bidding_strategy_type (MAXIMIZE_CONVERSIONS, TARGET_CPA, etc.),
+    bidding_strategy_system_status (LEARNING, ELIGIBLE, LIMITED, etc.),
+    daily budget, and last-30-day metrics.
+
+    Use this before recommending changes — don't edit campaigns in a learning phase.
+    campaign_id: optional filter to a specific campaign.
+    """
+    from adloop.ads.read import get_bid_strategy_status as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_id=campaign_id,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_budget_pacing(
+    customer_id: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """Get monthly budget pacing — spend-to-date, projected spend, pace percentage.
+
+    Shows daily budget, month-to-date spend, daily average spend,
+    projected month-end spend, and whether each campaign is over or under pace.
+
+    campaign_id: optional filter to a specific campaign.
+    """
+    from adloop.ads.read import get_budget_pacing as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_id=campaign_id,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_ad_schedule_performance(
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """Get performance by hour of day and day of week.
+
+    Identifies peak and off-peak patterns. Important for local service
+    businesses (e.g. emergency plumber at 2am vs 2pm).
+
+    campaign_id: optional filter to a specific campaign.
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.read import get_ad_schedule_performance as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        campaign_id=campaign_id,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_auction_insights(
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """Get auction insights — competitor overlap rate, outranking share, position data.
+
+    Shows which competitors appear alongside your ads and how often you
+    outrank them. Requires an allowlisted Google Ads account — returns a
+    helpful error if access is not available.
+
+    campaign_id: optional filter to a specific campaign.
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.read import get_auction_insights as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        campaign_id=campaign_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cross-Reference Tools (GA4 + Ads combined)
+# ---------------------------------------------------------------------------
+
+
 @mcp.tool(annotations=_READONLY)
 @_safe
 def analyze_campaign_conversions(
