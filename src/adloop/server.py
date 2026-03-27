@@ -290,10 +290,10 @@ def get_keyword_performance(
 ) -> dict:
     """Get keyword metrics including quality scores and competitive data.
 
-    Returns: keyword text, match type, quality score, ad_group_id, criterion_id,
-    impressions, clicks, CTR, CPC, cost, conversions for each keyword.
-    The ad_group_id and criterion_id can be used to construct entity_id
-    strings (e.g. "adGroupId~criterionId") for pause_entity calls.
+    Returns: keyword text, match type, quality score, ad_group.id, ad_group.name,
+    ad_group_criterion.criterion_id, impressions, clicks, CTR, CPC, cost,
+    conversions for each keyword. Use ad_group.id and criterion_id to
+    construct entity_id strings (e.g. "adGroupId~criterionId") for pause_entity.
     """
     from adloop.ads.read import get_keyword_performance as _impl
 

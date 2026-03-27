@@ -139,9 +139,7 @@ def get_search_terms(
     """Get search terms report — what users actually typed before clicking ads."""
     from adloop.ads.gaql import execute_query
 
-    campaign_filter = ""
-    if campaign_id:
-        campaign_filter = f"AND campaign.id = {campaign_id}"
+    campaign_filter = _campaign_filter_clause(campaign_id)
 
     # search_term_view requires an explicit date segment, so we always
     # include DURING LAST_30_DAYS as baseline and override if dates given.
@@ -678,6 +676,16 @@ def _date_clause(start: str, end: str) -> str:
     return "AND segments.date DURING LAST_30_DAYS"
 
 
+def _campaign_filter_clause(campaign_id: str) -> str:
+    """Build a GAQL campaign filter, validating the ID is numeric."""
+    if not campaign_id:
+        return ""
+    stripped = campaign_id.replace("-", "").strip()
+    if not stripped.isdigit():
+        raise ValueError(f"Invalid campaign_id: {campaign_id!r} — must be numeric")
+    return f"AND campaign.id = {stripped}"
+
+
 
 def _enrich_cost_fields(rows: list[dict]) -> None:
     """Add human-readable cost and CPA fields computed from cost_micros."""
@@ -716,8 +724,7 @@ def _enrich_conversion_rate(rows: list[dict]) -> None:
     for row in rows:
         clicks = row.get("metrics.clicks", 0) or 0
         conversions = row.get("metrics.conversions", 0) or 0
-        if clicks > 0:
-            row["metrics.conversion_rate"] = round(conversions / clicks * 100, 2)
+        row["metrics.conversion_rate"] = round(conversions / clicks * 100, 2) if clicks > 0 else 0.0
 
 
 def _enrich_budget_fields(rows: list[dict]) -> None:

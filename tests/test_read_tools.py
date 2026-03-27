@@ -554,6 +554,28 @@ class TestGetAdSchedulePerformance:
         assert row["metrics.cpa"] == 5.0  # 5.0 / 1
 
     @patch("adloop.ads.gaql.execute_query")
+    def test_zero_clicks_conversion_rate(self, mock_query, config):
+        mock_query.return_value = [
+            {
+                "campaign.name": "Test",
+                "campaign.id": 111,
+                "segments.day_of_week": "SUNDAY",
+                "segments.hour": 3,
+                "metrics.impressions": 50,
+                "metrics.clicks": 0,
+                "metrics.ctr": 0.0,
+                "metrics.cost_micros": 0,
+                "metrics.conversions": 0,
+            }
+        ]
+
+        result = get_ad_schedule_performance(config, customer_id="1234567890")
+
+        row = result["schedule_performance"][0]
+        assert row["metrics.conversion_rate"] == 0.0
+        assert "metrics.cpa" not in row  # no conversions = no CPA
+
+    @patch("adloop.ads.gaql.execute_query")
     def test_campaign_filter(self, mock_query, config):
         mock_query.return_value = []
 
@@ -755,3 +777,9 @@ class TestGetSearchTerms:
         # Verify campaign.id is in the SELECT clause
         call_query = mock_query.call_args[0][2]
         assert "campaign.id" in call_query
+
+    def test_invalid_campaign_id_raises(self, config):
+        with pytest.raises(ValueError, match="must be numeric"):
+            get_search_terms(
+                config, customer_id="1234567890", campaign_id="DROP TABLE"
+            )
