@@ -43,8 +43,8 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 - Ads read tools automatically compute `metrics.cost` (EUR) and `metrics.cpa` from `metrics.cost_micros` — no manual division needed.
 - `metrics.average_cpc_eur` is also pre-computed where available.
 - `get_ad_performance` returns full `headlines` and `descriptions` lists for RSAs.
-- `get_keyword_performance` returns `ad_group.id` and `ad_group_criterion.criterion_id` — use these to construct `entity_id` strings (e.g. `"adGroupId~criterionId"`) for `pause_entity` calls.
-- `get_search_terms` returns `metrics.cost` per search term — use for negative keyword analysis (flag terms spending > 2-3x CPA with zero conversions).
+- `get_keyword_performance` returns `ad_group.id`, `ad_group.name`, and `ad_group_criterion.criterion_id` — use these to construct `entity_id` strings (e.g. `"adGroupId~criterionId"`) for `pause_entity` calls, and `ad_group.name` for human-readable reporting.
+- `get_search_terms` returns `campaign.id` and `metrics.cost` per search term — use `campaign.id` for `add_negative_keywords`, and cost for negative keyword analysis (flag terms spending > 2-3x CPA with zero conversions).
 
 ### Cross-Reference Tools (GA4 + Ads combined)
 
@@ -55,6 +55,8 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 | `attribution_check` | "Are my conversions tracked correctly?", Ads vs GA4 conversion discrepancies | `date_range_start`, `date_range_end`, `conversion_events` (optional GA4 event names) |
 
 These tools call both APIs internally and return unified results with computed `insights[]`. They are read-only — no mutations. Each returns a `date_range` and auto-generates conditional warnings (GDPR gaps, zero conversions, attribution mismatches, orphaned URLs).
+
+**`analyze_campaign_conversions` details:** Returns one row per campaign (with `campaign_id`) including `conversion_discrepancy_pct` between Ads and GA4. When `campaign_name` is omitted, all campaigns are returned — no need to call once per campaign.
 
 ### Tracking Tools
 

@@ -731,4 +731,27 @@ class TestGetSearchTerms:
         get_search_terms(config, customer_id="1234567890")
 
         call_query = mock_query.call_args[0][2]
-        assert "campaign.id" not in call_query
+        assert "campaign.id =" not in call_query
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_query_includes_campaign_id_field(self, mock_query, config):
+        mock_query.return_value = [
+            {
+                "search_term_view.search_term": "test",
+                "campaign.id": 12345,
+                "campaign.name": "Campaign A",
+                "ad_group.name": "Ad Group 1",
+                "metrics.impressions": 100,
+                "metrics.clicks": 10,
+                "metrics.cost_micros": 5_000_000,
+                "metrics.conversions": 1,
+            }
+        ]
+
+        result = get_search_terms(config, customer_id="1234567890")
+
+        row = result["search_terms"][0]
+        assert row["campaign.id"] == 12345
+        # Verify campaign.id is in the SELECT clause
+        call_query = mock_query.call_args[0][2]
+        assert "campaign.id" in call_query

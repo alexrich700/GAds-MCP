@@ -316,7 +316,9 @@ def get_search_terms(
     """Get search terms report — what users actually typed before clicking your ads.
 
     Critical for finding negative keyword opportunities and understanding user intent.
-    Returns: search term, campaign, ad group, impressions, clicks, cost, conversions.
+    Returns: search term, campaign_id, campaign_name, ad group, impressions,
+    clicks, cost, conversions. Each row includes campaign.id so you can pass
+    it directly to add_negative_keywords.
 
     campaign_id: optional filter to a specific campaign. When omitted, returns
     search terms across all campaigns.
@@ -621,6 +623,10 @@ def analyze_campaign_conversions(
     Combines Google Ads campaign metrics with GA4 session/conversion data to
     reveal click-to-session ratios (GDPR indicator), compare Ads-reported vs
     GA4-reported conversions, and compute cost-per-GA4-conversion.
+
+    Returns one row per campaign (with campaign_id) including
+    conversion_discrepancy_pct between Ads and GA4. When campaign_name is
+    provided, filters to matching campaigns.
 
     Also returns non-paid channel conversion rates for comparison context.
     Date format: "YYYY-MM-DD". Empty = last 30 days.

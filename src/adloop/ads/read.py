@@ -148,7 +148,7 @@ def get_search_terms(
     if date_range_start and date_range_end:
         query = f"""
             SELECT search_term_view.search_term,
-                   campaign.name, ad_group.name,
+                   campaign.id, campaign.name, ad_group.name,
                    metrics.impressions, metrics.clicks,
                    metrics.cost_micros, metrics.conversions
             FROM search_term_view
@@ -160,7 +160,7 @@ def get_search_terms(
     else:
         query = f"""
             SELECT search_term_view.search_term,
-                   campaign.name, ad_group.name,
+                   campaign.id, campaign.name, ad_group.name,
                    metrics.impressions, metrics.clicks,
                    metrics.cost_micros, metrics.conversions
             FROM search_term_view
