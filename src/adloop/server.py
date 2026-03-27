@@ -138,13 +138,13 @@ def get_account_summaries() -> dict:
 @mcp.tool(annotations=_READONLY)
 @_safe
 def run_ga4_report(
-    dimensions: list[str] | None = None,
-    metrics: list[str] | None = None,
+    dimensions: list[str] = [],
+    metrics: list[str] = [],
     date_range_start: str = "7daysAgo",
     date_range_end: str = "today",
     property_id: str = "",
     limit: int = 100,
-    dimension_filter: dict[str, str] | None = None,
+    dimension_filter: dict[str, str] = {},
 ) -> dict:
     """Run a custom GA4 report with specified dimensions, metrics, and date range.
 
@@ -176,8 +176,8 @@ def run_ga4_report(
 @mcp.tool(annotations=_READONLY)
 @_safe
 def run_realtime_report(
-    dimensions: list[str] | None = None,
-    metrics: list[str] | None = None,
+    dimensions: list[str] = [],
+    metrics: list[str] = [],
     property_id: str = "",
 ) -> dict:
     """Run a GA4 realtime report showing current active users and events.
@@ -676,7 +676,7 @@ def attribution_check(
     date_range_end: str = "",
     customer_id: str = "",
     property_id: str = "",
-    conversion_events: list[str] | None = None,
+    conversion_events: list[str] = [],
 ) -> dict:
     """Compare Ads-reported conversions vs GA4 — find tracking discrepancies.
 
@@ -742,7 +742,7 @@ def draft_campaign(
     target_roas: float = 0,
     channel_type: str = "SEARCH",
     ad_group_name: str = "",
-    keywords: list[dict] | None = None,
+    keywords: list[dict] = [],
     final_url_suffix: str | None = None,
 ) -> dict:
     """Draft a full campaign structure — returns a PREVIEW, does NOT create anything.
@@ -792,7 +792,7 @@ def draft_campaign(
 def draft_ad_group(
     campaign_id: str,
     ad_group_name: str,
-    keywords: list[dict] | None = None,
+    keywords: list[dict] = [],
     customer_id: str = "",
     cpc_bid_micros: int = 0,
 ) -> dict:
@@ -829,8 +829,8 @@ def update_campaign(
     target_cpa: float = 0,
     target_roas: float = 0,
     daily_budget: float = 0,
-    geo_target_ids: list[str] | None = None,
-    language_ids: list[str] | None = None,
+    geo_target_ids: list[str] = [],
+    language_ids: list[str] = [],
     final_url_suffix: str | None = None,
 ) -> dict:
     """Draft an update to an existing campaign — returns a PREVIEW, does NOT apply.
@@ -861,8 +861,8 @@ def update_campaign(
         target_cpa=target_cpa,
         target_roas=target_roas,
         daily_budget=daily_budget,
-        geo_target_ids=geo_target_ids,
-        language_ids=language_ids,
+        geo_target_ids=geo_target_ids or None,
+        language_ids=language_ids or None,
         final_url_suffix=final_url_suffix,
     )
 
