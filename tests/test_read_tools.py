@@ -12,8 +12,10 @@ from adloop.ads.read import (
     get_change_history,
     get_device_performance,
     get_impression_share,
+    get_keyword_performance,
     get_location_performance,
     get_quality_score_details,
+    get_search_terms,
 )
 from adloop.config import AdLoopConfig, AdsConfig, SafetyConfig
 
@@ -548,6 +550,8 @@ class TestGetAdSchedulePerformance:
         assert row["segments.day_of_week"] == "MONDAY"
         assert row["segments.hour"] == 9
         assert row["metrics.cost"] == 5.0
+        assert row["metrics.conversion_rate"] == 10.0  # 1/10 * 100
+        assert row["metrics.cpa"] == 5.0  # 5.0 / 1
 
     @patch("adloop.ads.gaql.execute_query")
     def test_campaign_filter(self, mock_query, config):
@@ -635,3 +639,96 @@ class TestGetAuctionInsights:
 
         assert result["auction_insights"] == []
         assert result["total_rows"] == 0
+
+
+# ---------------------------------------------------------------------------
+# get_keyword_performance
+# ---------------------------------------------------------------------------
+
+
+class TestGetKeywordPerformance:
+    @patch("adloop.ads.gaql.execute_query")
+    def test_returns_ids(self, mock_query, config):
+        mock_query.return_value = [
+            {
+                "campaign.name": "Campaign A",
+                "ad_group.name": "Ad Group 1",
+                "ad_group.id": 555,
+                "ad_group_criterion.criterion_id": 777,
+                "ad_group_criterion.keyword.text": "test keyword",
+                "ad_group_criterion.keyword.match_type": "EXACT",
+                "ad_group_criterion.quality_info.quality_score": 7,
+                "metrics.impressions": 500,
+                "metrics.clicks": 50,
+                "metrics.ctr": 0.1,
+                "metrics.average_cpc": 1_000_000,
+                "metrics.cost_micros": 50_000_000,
+                "metrics.conversions": 2,
+            }
+        ]
+
+        result = get_keyword_performance(config, customer_id="1234567890")
+
+        assert result["total_keywords"] == 1
+        row = result["keywords"][0]
+        assert row["ad_group.id"] == 555
+        assert row["ad_group_criterion.criterion_id"] == 777
+        assert row["metrics.cost"] == 50.0
+        assert row["metrics.cpa"] == 25.0
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_query_includes_id_fields(self, mock_query, config):
+        mock_query.return_value = []
+
+        get_keyword_performance(config, customer_id="1234567890")
+
+        call_query = mock_query.call_args[0][2]
+        assert "ad_group.id" in call_query
+        assert "ad_group_criterion.criterion_id" in call_query
+
+
+# ---------------------------------------------------------------------------
+# get_search_terms
+# ---------------------------------------------------------------------------
+
+
+class TestGetSearchTerms:
+    @patch("adloop.ads.gaql.execute_query")
+    def test_default_query(self, mock_query, config):
+        mock_query.return_value = [
+            {
+                "search_term_view.search_term": "test query",
+                "campaign.name": "Campaign A",
+                "ad_group.name": "Ad Group 1",
+                "metrics.impressions": 100,
+                "metrics.clicks": 10,
+                "metrics.cost_micros": 5_000_000,
+                "metrics.conversions": 1,
+            }
+        ]
+
+        result = get_search_terms(config, customer_id="1234567890")
+
+        assert result["total_search_terms"] == 1
+        row = result["search_terms"][0]
+        assert row["metrics.cost"] == 5.0
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_campaign_filter(self, mock_query, config):
+        mock_query.return_value = []
+
+        get_search_terms(
+            config, customer_id="1234567890", campaign_id="999"
+        )
+
+        call_query = mock_query.call_args[0][2]
+        assert "campaign.id = 999" in call_query
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_no_campaign_filter_by_default(self, mock_query, config):
+        mock_query.return_value = []
+
+        get_search_terms(config, customer_id="1234567890")
+
+        call_query = mock_query.call_args[0][2]
+        assert "campaign.id" not in call_query

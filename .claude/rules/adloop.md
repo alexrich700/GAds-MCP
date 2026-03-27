@@ -1,3 +1,6 @@
+---
+description: AdLoop MCP orchestration — Google Ads + GA4 + codebase intelligence
+---
 
 # AdLoop — AI Orchestration Rules
 
@@ -18,9 +21,11 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 | Tool | When to Use | Key Parameters |
 |------|-------------|----------------|
 | `get_account_summaries` | First-time discovery — find which GA4 properties exist | (none — uses config) |
-| `run_ga4_report` | Any analytics question — sessions, users, conversions, page performance | `dimensions`, `metrics`, `date_range_start`, `date_range_end`, `limit` |
+| `run_ga4_report` | Any analytics question — sessions, users, conversions, page performance | `dimensions`, `metrics`, `date_range_start`, `date_range_end`, `limit`, `dimension_filter` |
 | `run_realtime_report` | After code deploys — verify tracking fires correctly | `dimensions`, `metrics` |
 | `get_tracking_events` | Understanding what events are configured and their volume | `date_range_start`, `date_range_end` |
+
+**GA4 report filtering:** `run_ga4_report` supports a `dimension_filter` parameter — a dict of `dimension_name -> exact_value` pairs combined with AND logic. Use `{"sessionSource": "google", "sessionMedium": "cpc"}` to isolate paid search traffic server-side instead of pulling all sources and filtering in post-processing.
 
 ### Google Ads Read Tools
 
@@ -30,7 +35,7 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 | `get_campaign_performance` | Campaign-level metrics — impressions, clicks, cost, conversions | `date_range_start`, `date_range_end` |
 | `get_ad_performance` | Ad copy analysis — which headlines/descriptions work | `date_range_start`, `date_range_end` |
 | `get_keyword_performance` | Keyword analysis — quality scores, competitive metrics | `date_range_start`, `date_range_end` |
-| `get_search_terms` | Find negative keyword opportunities and understand user intent | `date_range_start`, `date_range_end` |
+| `get_search_terms` | Find negative keyword opportunities and understand user intent | `date_range_start`, `date_range_end`, `campaign_id` (optional) |
 | `get_negative_keywords` | List existing negative keywords for a campaign or all campaigns | `campaign_id` (optional) |
 | `run_gaql` | Custom queries not covered by other tools | `query`, `format` (table/json/csv) |
 
@@ -38,29 +43,8 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 - Ads read tools automatically compute `metrics.cost` (EUR) and `metrics.cpa` from `metrics.cost_micros` — no manual division needed.
 - `metrics.average_cpc_eur` is also pre-computed where available.
 - `get_ad_performance` returns full `headlines` and `descriptions` lists for RSAs.
-
-### Google Ads Insights Tools
-
-| Tool | When to Use | Key Parameters |
-|------|-------------|----------------|
-| `get_impression_share` | Check-ins, "why aren't my ads showing?", visibility analysis | `level` (campaign/ad_group/keyword), `date_range_start`, `date_range_end` |
-| `get_change_history` | Correlate performance shifts with account changes | `resource_type`, `operation_type`, `date_range_start`, `date_range_end`, `limit` |
-| `get_device_performance` | Mobile vs desktop analysis, local service businesses | `level` (campaign/ad_group), `date_range_start`, `date_range_end` |
-| `get_location_performance` | Geographic analysis, local service area optimization | `date_range_start`, `date_range_end` |
-| `get_quality_score_details` | Deep keyword quality analysis with component breakdowns | `campaign_id` (optional), `date_range_start`, `date_range_end` |
-| `get_bid_strategy_status` | Check learning status before making changes | `campaign_id` (optional) |
-| `get_budget_pacing` | Monthly budget tracking, over/under pacing | `campaign_id` (optional) |
-| `get_ad_schedule_performance` | Hour/day performance patterns for scheduling optimization | `campaign_id` (optional), `date_range_start`, `date_range_end` |
-| `get_auction_insights` | Competitive analysis (requires allowlisted account) | `campaign_id` (optional), `date_range_start`, `date_range_end` |
-
-**Insights tool notes:**
-- `get_impression_share` adds `_pct` suffixed fields (e.g. `metrics.search_impression_share_pct` = "45.0%") alongside raw fractions.
-- `get_change_history` uses `change_event.change_date_time` (not `segments.date`). Max 30 days back. Default last 14 days.
-- `get_device_performance` adds `metrics.conversion_rate` (percentage).
-- `get_quality_score_details` returns component scores: `creative_quality_score` (ad relevance), `post_click_quality_score` (landing page), `search_predicted_ctr` (expected CTR). Values are ABOVE_AVERAGE, AVERAGE, or BELOW_AVERAGE.
-- `get_bid_strategy_status` shows `campaign.bidding_strategy_system_status` — check for LEARNING or LEARNING_LIMITED before recommending changes.
-- `get_budget_pacing` computes `pace_pct` (100% = on track, >100% = overspending, <100% = underspending).
-- `get_auction_insights` may return an error dict if the account is not allowlisted — always check for the `"error"` key.
+- `get_keyword_performance` returns `ad_group.id` and `ad_group_criterion.criterion_id` — use these to construct `entity_id` strings (e.g. `"adGroupId~criterionId"`) for `pause_entity` calls.
+- `get_search_terms` returns `metrics.cost` per search term — use for negative keyword analysis (flag terms spending > 2-3x CPA with zero conversions).
 
 ### Cross-Reference Tools (GA4 + Ads combined)
 
@@ -76,7 +60,7 @@ These tools call both APIs internally and return unified results with computed `
 
 | Tool | When to Use | Key Parameters |
 |------|-------------|----------------|
-| `validate_tracking` | Compare codebase event code against actual GA4 events — find missing/broken tracking | `expected_events` (list of event names found in code), `date_range_start`, `date_range_end` |
+| `validate_tracking` | Compare codebase event code against actual GA4 events — find missing/broken tracking | `expected_events` (list of event names found in code), `date_range_start`, `date_range_end`, `customer_id` (optional — cross-refs Ads conversion actions) |
 | `generate_tracking_code` | Generate ready-to-paste GA4 gtag JavaScript for an event | `event_name`, `event_params` (optional), `trigger` (form_submit/button_click/page_load) |
 
 `validate_tracking` requires the AI to first search the codebase for `gtag('event', ...)` or `dataLayer.push({event: ...})` calls, extract event names, then pass them to the tool. The tool queries GA4 and returns a structured comparison (matched, missing, unexpected, auto-collected).
@@ -169,13 +153,11 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 ### When user asks about performance or "how are my ads doing"
 
 1. Call `get_campaign_performance` for the relevant date range
-2. Call `get_impression_share` to see visibility and lost opportunity
-3. Call `get_bid_strategy_status` to check learning status and strategy health
-4. If they mention conversions, CPA, or "is it worth it", call `analyze_campaign_conversions` instead — it gives Ads + GA4 data in one call with GDPR-aware cost-per-conversion
-5. If they mention specific keywords or search terms, also call `get_keyword_performance` or `get_search_terms`
-6. Present a summary with the key metrics: spend (`metrics.cost`), clicks, conversions, CPA (`metrics.cpa`), CTR, impression share
-7. Highlight anything concerning: zero conversions, high CPA, low quality scores, wasteful search terms, high budget-lost IS, campaigns in learning phase
-8. Compare against best practices (see Marketing Best Practices section)
+2. If they mention conversions, CPA, or "is it worth it", call `analyze_campaign_conversions` instead — it gives Ads + GA4 data in one call with GDPR-aware cost-per-conversion
+3. If they mention specific keywords or search terms, also call `get_keyword_performance` or `get_search_terms`
+4. Present a summary with the key metrics: spend (`metrics.cost`), clicks, conversions, CPA (`metrics.cpa`), CTR
+5. Highlight anything concerning: zero conversions, high CPA, low quality scores, wasteful search terms
+6. Compare against best practices (see Marketing Best Practices section)
 
 ### When user asks about conversions or conversion drops
 
@@ -337,49 +319,6 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 2. Compare `campaigns[].ga4_conversion_rate` (paid) vs `non_paid_channels[].conversion_rate` (organic/direct/referral)
 3. If paid conversion rate is significantly lower, investigate landing page relevance and ad targeting before increasing spend
 
-### When user asks about impression share or "why aren't my ads showing"
-
-1. Call `get_impression_share` at campaign level for the relevant date range
-2. If `search_budget_lost_impression_share` is high → budget is the bottleneck, recommend a budget increase or narrower targeting
-3. If `search_rank_lost_impression_share` is high → ad rank is the issue, check quality scores via `get_quality_score_details` and consider bid strategy changes
-4. For keyword-level drill-down, call `get_impression_share` with `level="keyword"`
-5. Check `search_top_impression_share` — if the user wants to appear at the top of the page, this shows how often they do
-
-### When user asks why performance changed or "what happened"
-
-1. Call `get_change_history` for the relevant date range to see what was modified
-2. Call `get_campaign_performance` to see the performance shift
-3. Correlate: did a bid strategy change, budget change, or keyword modification coincide with the performance shift?
-4. If no account changes explain it, investigate external factors: seasonality, competitor moves (via `get_auction_insights` if available), or tracking issues
-
-### When user asks about mobile vs desktop performance
-
-1. Call `get_device_performance` for the relevant date range
-2. Compare CPA and conversion rates across MOBILE, DESKTOP, TABLET
-3. For local service businesses, highlight mobile performance — mobile users have higher intent (calling, directions)
-4. If one device has significantly worse CPA, consider device bid adjustments or separate campaigns
-
-### When user asks about geographic or location performance
-
-1. Call `get_location_performance` for the relevant date range
-2. Identify locations with high spend and low/zero conversions — potential waste
-3. Compare against the user's target service areas
-4. Recommend negative location targeting for areas outside the service radius
-
-### When user asks about budget pacing or "am I spending too much/little"
-
-1. Call `get_budget_pacing` to see month-to-date spend vs budget
-2. If `pace_pct` > 110%: campaign is overspending — may run out of budget before month end
-3. If `pace_pct` < 80%: campaign is underspending — budget may be too high or targeting too narrow
-4. Cross-reference with `get_impression_share` — if budget-lost IS is high and pace is low, something is off
-
-### When user asks about ad scheduling or "when should my ads run"
-
-1. Call `get_ad_schedule_performance` for the relevant date range (ideally last 30+ days for enough data)
-2. Identify hours and days with highest conversions and lowest CPA
-3. Identify off-peak hours with high spend and zero conversions
-4. Recommend ad schedule adjustments or bid modifiers for peak/off-peak hours
-
 ## Default Parameters
 
 When the user doesn't specify:
@@ -415,8 +354,6 @@ LIMIT n
 | `campaign_budget` | Budget information |
 | `bidding_strategy` | Bidding strategy details |
 | `customer_client` | List accounts under an MCC (uses login_customer_id) |
-| `change_event` | Account change history (max 30 days back) |
-| `geographic_view` | Performance by geographic location |
 
 ### Common Fields
 

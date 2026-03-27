@@ -72,12 +72,17 @@ def validate_tracking(
     property_id: str = "",
     date_range_start: str = "28daysAgo",
     date_range_end: str = "today",
+    customer_id: str = "",
 ) -> dict:
     """Compare expected tracking events (from codebase) against actual GA4 data.
 
     The AI searches the user's codebase for gtag/dataLayer event calls, extracts
     event names, and passes them here. This tool queries GA4 for actual events
     and returns a structured comparison.
+
+    When customer_id is provided, also pulls Google Ads conversion actions and
+    includes them in the comparison — showing which expected events have a
+    matching Ads conversion action and which are missing.
     """
     from adloop.ga4.tracking import get_tracking_events
 
@@ -135,7 +140,49 @@ def validate_tracking(
                 f"zero count — it may not be triggering for real users."
             )
 
-    return {
+    # Optionally cross-reference with Google Ads conversion actions
+    ads_conversion_actions: list[dict] = []
+    if customer_id:
+        from adloop.ads.gaql import execute_query
+
+        conv_query = """
+            SELECT conversion_action.name, conversion_action.type,
+                   conversion_action.status
+            FROM conversion_action
+            WHERE conversion_action.status = 'ENABLED'
+        """
+        try:
+            conv_rows = execute_query(config, customer_id, conv_query)
+            ads_conversion_names: set[str] = set()
+            for row in conv_rows:
+                name = row.get("conversion_action.name", "")
+                ads_conversion_names.add(name)
+                ads_conversion_actions.append({
+                    "name": name,
+                    "type": row.get("conversion_action.type", ""),
+                })
+
+            matched_in_ads = sorted(expected_set & ads_conversion_names)
+            missing_from_ads = sorted(expected_set - ads_conversion_names)
+
+            if missing_from_ads:
+                insights.append(
+                    f"{len(missing_from_ads)} expected event(s) have no matching "
+                    f"Google Ads conversion action: {', '.join(missing_from_ads)}. "
+                    f"These events may fire in GA4 but are not imported as Ads conversions."
+                )
+            if matched_in_ads:
+                insights.append(
+                    f"{len(matched_in_ads)} expected event(s) match Ads conversion "
+                    f"actions: {', '.join(matched_in_ads)}."
+                )
+        except Exception:
+            insights.append(
+                "Could not retrieve Google Ads conversion actions — "
+                "check customer_id and API access."
+            )
+
+    result = {
         "matched": matched,
         "missing_from_ga4": missing_from_ga4,
         "unexpected_in_ga4": unexpected,
@@ -145,6 +192,9 @@ def validate_tracking(
             "start": date_range_start, "end": date_range_end,
         }),
     }
+    if ads_conversion_actions:
+        result["ads_conversion_actions"] = ads_conversion_actions
+    return result
 
 
 # ---------------------------------------------------------------------------
