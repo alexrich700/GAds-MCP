@@ -164,7 +164,7 @@ class TestGetChangeHistory:
         assert "resource_change_operation = 'UPDATE'" in call_query
 
     @patch("adloop.ads.gaql.execute_query")
-    def test_date_range_override(self, mock_query, config):
+    def test_date_range_appends_end_of_day(self, mock_query, config):
         mock_query.return_value = []
 
         get_change_history(
@@ -175,8 +175,48 @@ class TestGetChangeHistory:
         )
 
         call_query = mock_query.call_args[0][2]
-        assert "BETWEEN '2026-03-01' AND '2026-03-27'" in call_query
+        # End date should have 23:59:59 appended for timestamp comparison
+        assert "2026-03-27 23:59:59" in call_query
+        assert ">= '2026-03-01'" in call_query
         assert "DURING LAST_14_DAYS" not in call_query
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_date_range_preserves_explicit_time(self, mock_query, config):
+        mock_query.return_value = []
+
+        get_change_history(
+            config,
+            customer_id="1234567890",
+            date_range_start="2026-03-01",
+            date_range_end="2026-03-27T15:00:00",
+        )
+
+        call_query = mock_query.call_args[0][2]
+        # Should NOT append 23:59:59 when caller already provided a time
+        assert "2026-03-27T15:00:00" in call_query
+        assert "23:59:59" not in call_query
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_limit_clamped_to_api_max(self, mock_query, config):
+        mock_query.return_value = []
+
+        get_change_history(
+            config, customer_id="1234567890", limit=50_000
+        )
+
+        call_query = mock_query.call_args[0][2]
+        assert "LIMIT 10000" in call_query
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_limit_clamped_to_minimum(self, mock_query, config):
+        mock_query.return_value = []
+
+        get_change_history(
+            config, customer_id="1234567890", limit=-5
+        )
+
+        call_query = mock_query.call_args[0][2]
+        assert "LIMIT 1" in call_query
 
     @patch("adloop.ads.gaql.execute_query")
     def test_empty_results(self, mock_query, config):

@@ -287,6 +287,9 @@ def get_change_history(
     """Get account change history from the change_event resource."""
     from adloop.ads.gaql import execute_query
 
+    # change_event has a hard API max of 10,000 rows.
+    limit = max(1, min(limit, 10_000))
+
     resource_filter = ""
     if resource_type:
         resource_filter = (
@@ -299,11 +302,16 @@ def get_change_history(
             f"AND change_event.resource_change_operation = '{operation_type}'"
         )
 
-    # change_event uses change_date_time, not segments.date.
+    # change_event uses change_date_time (a timestamp), not segments.date.
+    # A bare date like '2026-03-27' means midnight, which misses the rest
+    # of that day.  Append end-of-day time when only a date is provided.
     if date_range_start and date_range_end:
+        end = date_range_end
+        if "T" not in end and " " not in end:
+            end = f"{end} 23:59:59"
         date_where = (
-            f"change_event.change_date_time BETWEEN "
-            f"'{date_range_start}' AND '{date_range_end}'"
+            f"change_event.change_date_time >= '{date_range_start}'"
+            f" AND change_event.change_date_time <= '{end}'"
         )
     else:
         date_where = "change_event.change_date_time DURING LAST_14_DAYS"
