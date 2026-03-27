@@ -429,7 +429,7 @@ def get_device_performance(
 ) -> dict:
     """Get performance segmented by device — MOBILE, DESKTOP, TABLET.
 
-    Essential for local service businesses where mobile intent differs
+    Essential for businesses where mobile intent differs
     dramatically from desktop. Shows clicks, cost, conversions, and
     conversion rate per device.
 
@@ -556,7 +556,7 @@ def get_ad_schedule_performance(
 ) -> dict:
     """Get performance by hour of day and day of week.
 
-    Identifies peak and off-peak patterns. Important for local service
+    Identifies peak and off-peak patterns. Important for service
     businesses (e.g. emergency plumber at 2am vs 2pm).
 
     Returns: campaign, day_of_week, hour, impressions, clicks, CTR, cost,
