@@ -131,7 +131,12 @@ def analyze_campaign_conversions(
         conv_rate = _safe_div(ga4_conversions, ga4_sessions)
         cost_per_conv = _safe_div(ads_cost, ga4_conversions)
 
+        # Conversion discrepancy between Ads and GA4
+        denom = max(ads_conversions, ga4_conversions, 1)
+        discrepancy = round(abs(ads_conversions - ga4_conversions) / denom * 100, 1)
+
         entry = {
+            "campaign_id": str(camp.get("campaign.id", "")),
             "campaign_name": name,
             "campaign_status": camp.get("campaign.status", ""),
             "ads_clicks": ads_clicks,
@@ -142,6 +147,7 @@ def analyze_campaign_conversions(
             "click_to_session_ratio": ratio,
             "ga4_conversion_rate": conv_rate,
             "cost_per_ga4_conversion": cost_per_conv,
+            "conversion_discrepancy_pct": discrepancy,
         }
         campaigns.append(entry)
 

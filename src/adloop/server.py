@@ -144,6 +144,7 @@ def run_ga4_report(
     date_range_end: str = "today",
     property_id: str = "",
     limit: int = 100,
+    dimension_filter: dict[str, str] | None = None,
 ) -> dict:
     """Run a custom GA4 report with specified dimensions, metrics, and date range.
 
@@ -152,6 +153,11 @@ def run_ga4_report(
 
     Date formats: "today", "yesterday", "7daysAgo", "28daysAgo", "90daysAgo", or "YYYY-MM-DD".
     If property_id is empty, uses the default from config.
+
+    dimension_filter: optional dict of dimension_name -> exact match value to
+    filter results server-side. Multiple entries are combined with AND logic.
+    Example: {"sessionSource": "google", "sessionMedium": "cpc"} returns only
+    paid search traffic.
     """
     from adloop.ga4.reports import run_ga4_report as _impl
 
@@ -163,6 +169,7 @@ def run_ga4_report(
         date_range_start=date_range_start,
         date_range_end=date_range_end,
         limit=limit,
+        dimension_filter=dimension_filter,
     )
 
 
@@ -283,8 +290,10 @@ def get_keyword_performance(
 ) -> dict:
     """Get keyword metrics including quality scores and competitive data.
 
-    Returns: keyword text, match type, quality score, impressions,
-    clicks, CTR, CPC, conversions for each keyword.
+    Returns: keyword text, match type, quality score, ad_group.id, ad_group.name,
+    ad_group_criterion.criterion_id, impressions, clicks, CTR, CPC, cost,
+    conversions for each keyword. Use ad_group.id and criterion_id to
+    construct entity_id strings (e.g. "adGroupId~criterionId") for pause_entity.
     """
     from adloop.ads.read import get_keyword_performance as _impl
 
@@ -302,11 +311,17 @@ def get_search_terms(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    campaign_id: str = "",
 ) -> dict:
     """Get search terms report — what users actually typed before clicking your ads.
 
     Critical for finding negative keyword opportunities and understanding user intent.
-    Returns: search term, campaign, ad group, impressions, clicks, conversions.
+    Returns: search term, campaign_id, campaign_name, ad group, impressions,
+    clicks, cost, conversions. Each row includes campaign.id so you can pass
+    it directly to add_negative_keywords.
+
+    campaign_id: optional filter to a specific campaign. When omitted, returns
+    search terms across all campaigns.
     """
     from adloop.ads.read import get_search_terms as _impl
 
@@ -315,6 +330,7 @@ def get_search_terms(
         customer_id=customer_id or _config.ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
+        campaign_id=campaign_id,
     )
 
 
@@ -543,6 +559,9 @@ def get_ad_schedule_performance(
     Identifies peak and off-peak patterns. Important for local service
     businesses (e.g. emergency plumber at 2am vs 2pm).
 
+    Returns: campaign, day_of_week, hour, impressions, clicks, CTR, cost,
+    conversions, conversion_rate, CPA for each time slot.
+
     campaign_id: optional filter to a specific campaign.
     Date format: "YYYY-MM-DD". Empty = last 30 days.
     """
@@ -604,6 +623,10 @@ def analyze_campaign_conversions(
     Combines Google Ads campaign metrics with GA4 session/conversion data to
     reveal click-to-session ratios (GDPR indicator), compare Ads-reported vs
     GA4-reported conversions, and compute cost-per-GA4-conversion.
+
+    Returns one row per campaign (with campaign_id) including
+    conversion_discrepancy_pct between Ads and GA4. When campaign_name is
+    provided, filters to matching campaigns.
 
     Also returns non-paid channel conversion rates for comparison context.
     Date format: "YYYY-MM-DD". Empty = last 30 days.
@@ -1109,6 +1132,7 @@ def validate_tracking(
     property_id: str = "",
     date_range_start: str = "28daysAgo",
     date_range_end: str = "today",
+    customer_id: str = "",
 ) -> dict:
     """Compare tracking events found in the codebase against actual GA4 data.
 
@@ -1118,6 +1142,10 @@ def validate_tracking(
 
     Returns: matched events, events missing from GA4, unexpected GA4 events,
     and auto-collected events (page_view, session_start, etc.).
+
+    customer_id: optional — when provided, also pulls Google Ads conversion
+    actions and checks which expected events have matching Ads conversion
+    actions configured.
     """
     from adloop.tracking import validate_tracking as _impl
 
@@ -1127,6 +1155,7 @@ def validate_tracking(
         property_id=property_id or _config.ga4.property_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
+        customer_id=customer_id,
     )
 
 

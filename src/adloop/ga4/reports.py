@@ -45,11 +45,20 @@ def run_ga4_report(
     date_range_start: str = "7daysAgo",
     date_range_end: str = "today",
     limit: int = 100,
+    dimension_filter: dict[str, str] | None = None,
 ) -> dict:
-    """Run a GA4 report with specified dimensions, metrics, and date range."""
+    """Run a GA4 report with specified dimensions, metrics, and date range.
+
+    dimension_filter: optional dict of dimension_name -> exact match value.
+    Multiple entries are combined with AND logic. Example:
+    {"sessionSource": "google", "sessionMedium": "cpc"} filters to paid search.
+    """
     from google.analytics.data_v1beta.types import (
         DateRange,
         Dimension,
+        Filter,
+        FilterExpression,
+        FilterExpressionList,
         Metric,
         RunReportRequest,
     )
@@ -68,6 +77,27 @@ def run_ga4_report(
         date_ranges=[DateRange(start_date=date_range_start, end_date=date_range_end)],
         limit=limit,
     )
+
+    if dimension_filter:
+        filter_exprs = []
+        for field_name, value in dimension_filter.items():
+            filter_exprs.append(
+                FilterExpression(
+                    filter=Filter(
+                        field_name=field_name,
+                        string_filter=Filter.StringFilter(
+                            value=value,
+                            match_type=Filter.StringFilter.MatchType.EXACT,
+                        ),
+                    )
+                )
+            )
+        if len(filter_exprs) == 1:
+            request.dimension_filter = filter_exprs[0]
+        else:
+            request.dimension_filter = FilterExpression(
+                and_group=FilterExpressionList(expressions=filter_exprs)
+            )
 
     response = client.run_report(request)
 

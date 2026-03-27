@@ -108,7 +108,8 @@ def get_keyword_performance(
     date_clause = _date_clause(date_range_start, date_range_end)
 
     query = f"""
-        SELECT campaign.name, ad_group.name,
+        SELECT campaign.name, ad_group.name, ad_group.id,
+               ad_group_criterion.criterion_id,
                ad_group_criterion.keyword.text,
                ad_group_criterion.keyword.match_type,
                ad_group_criterion.quality_info.quality_score,
@@ -133,44 +134,36 @@ def get_search_terms(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    campaign_id: str = "",
 ) -> dict:
     """Get search terms report — what users actually typed before clicking ads."""
     from adloop.ads.gaql import execute_query
 
-    date_clause = _date_clause(date_range_start, date_range_end)
+    campaign_filter = _campaign_filter_clause(campaign_id)
 
-    query = f"""
-        SELECT search_term_view.search_term,
-               campaign.name, ad_group.name,
-               metrics.impressions, metrics.clicks,
-               metrics.cost_micros, metrics.conversions
-        FROM search_term_view
-        WHERE segments.date DURING LAST_30_DAYS
-          {f"AND segments.date BETWEEN '{date_range_start}' AND '{date_range_end}'" if date_range_start and date_range_end else ""}
-        ORDER BY metrics.clicks DESC
-        LIMIT 200
-    """
     # search_term_view requires an explicit date segment, so we always
     # include DURING LAST_30_DAYS as baseline and override if dates given.
     if date_range_start and date_range_end:
         query = f"""
             SELECT search_term_view.search_term,
-                   campaign.name, ad_group.name,
+                   campaign.id, campaign.name, ad_group.name,
                    metrics.impressions, metrics.clicks,
                    metrics.cost_micros, metrics.conversions
             FROM search_term_view
             WHERE segments.date BETWEEN '{date_range_start}' AND '{date_range_end}'
+              {campaign_filter}
             ORDER BY metrics.clicks DESC
             LIMIT 200
         """
     else:
-        query = """
+        query = f"""
             SELECT search_term_view.search_term,
-                   campaign.name, ad_group.name,
+                   campaign.id, campaign.name, ad_group.name,
                    metrics.impressions, metrics.clicks,
                    metrics.cost_micros, metrics.conversions
             FROM search_term_view
             WHERE segments.date DURING LAST_30_DAYS
+              {campaign_filter}
             ORDER BY metrics.clicks DESC
             LIMIT 200
         """
@@ -611,6 +604,7 @@ def get_ad_schedule_performance(
 
     rows = execute_query(config, customer_id, query)
     _enrich_cost_fields(rows)
+    _enrich_conversion_rate(rows)
 
     return {"schedule_performance": rows, "total_rows": len(rows)}
 
@@ -682,6 +676,16 @@ def _date_clause(start: str, end: str) -> str:
     return "AND segments.date DURING LAST_30_DAYS"
 
 
+def _campaign_filter_clause(campaign_id: str) -> str:
+    """Build a GAQL campaign filter, validating the ID is numeric."""
+    if not campaign_id:
+        return ""
+    stripped = campaign_id.replace("-", "").strip()
+    if not stripped.isdigit():
+        raise ValueError(f"Invalid campaign_id: {campaign_id!r} — must be numeric")
+    return f"AND campaign.id = {stripped}"
+
+
 
 def _enrich_cost_fields(rows: list[dict]) -> None:
     """Add human-readable cost and CPA fields computed from cost_micros."""
@@ -720,8 +724,7 @@ def _enrich_conversion_rate(rows: list[dict]) -> None:
     for row in rows:
         clicks = row.get("metrics.clicks", 0) or 0
         conversions = row.get("metrics.conversions", 0) or 0
-        if clicks > 0:
-            row["metrics.conversion_rate"] = round(conversions / clicks * 100, 2)
+        row["metrics.conversion_rate"] = round(conversions / clicks * 100, 2) if clicks > 0 else 0.0
 
 
 def _enrich_budget_fields(rows: list[dict]) -> None:

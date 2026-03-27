@@ -23,9 +23,11 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 | Tool | When to Use | Key Parameters |
 |------|-------------|----------------|
 | `get_account_summaries` | First-time discovery — find which GA4 properties exist | (none — uses config) |
-| `run_ga4_report` | Any analytics question — sessions, users, conversions, page performance | `dimensions`, `metrics`, `date_range_start`, `date_range_end`, `limit` |
+| `run_ga4_report` | Any analytics question — sessions, users, conversions, page performance | `dimensions`, `metrics`, `date_range_start`, `date_range_end`, `limit`, `dimension_filter` |
 | `run_realtime_report` | After code deploys — verify tracking fires correctly | `dimensions`, `metrics` |
 | `get_tracking_events` | Understanding what events are configured and their volume | `date_range_start`, `date_range_end` |
+
+**GA4 report filtering:** `run_ga4_report` supports a `dimension_filter` parameter — a dict of `dimension_name -> exact_value` pairs combined with AND logic. Use `{"sessionSource": "google", "sessionMedium": "cpc"}` to isolate paid search traffic server-side instead of pulling all sources and filtering in post-processing.
 
 ### Google Ads Read Tools
 
@@ -35,7 +37,7 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 | `get_campaign_performance` | Campaign-level metrics — impressions, clicks, cost, conversions | `date_range_start`, `date_range_end` |
 | `get_ad_performance` | Ad copy analysis — which headlines/descriptions work | `date_range_start`, `date_range_end` |
 | `get_keyword_performance` | Keyword analysis — quality scores, competitive metrics | `date_range_start`, `date_range_end` |
-| `get_search_terms` | Find negative keyword opportunities and understand user intent | `date_range_start`, `date_range_end` |
+| `get_search_terms` | Find negative keyword opportunities and understand user intent | `date_range_start`, `date_range_end`, `campaign_id` (optional) |
 | `get_negative_keywords` | List existing negative keywords for a campaign or all campaigns | `campaign_id` (optional) |
 | `run_gaql` | Custom queries not covered by other tools | `query`, `format` (table/json/csv) |
 
@@ -43,6 +45,8 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 - Ads read tools automatically compute `metrics.cost` (EUR) and `metrics.cpa` from `metrics.cost_micros` — no manual division needed.
 - `metrics.average_cpc_eur` is also pre-computed where available.
 - `get_ad_performance` returns full `headlines` and `descriptions` lists for RSAs.
+- `get_keyword_performance` returns `ad_group.id`, `ad_group.name`, and `ad_group_criterion.criterion_id` — use these to construct `entity_id` strings (e.g. `"adGroupId~criterionId"`) for `pause_entity` calls, and `ad_group.name` for human-readable reporting.
+- `get_search_terms` returns `campaign.id` and `metrics.cost` per search term — use `campaign.id` for `add_negative_keywords`, and cost for negative keyword analysis (flag terms spending > 2-3x CPA with zero conversions).
 
 ### Cross-Reference Tools (GA4 + Ads combined)
 
@@ -54,11 +58,13 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 
 These tools call both APIs internally and return unified results with computed `insights[]`. They are read-only — no mutations. Each returns a `date_range` and auto-generates conditional warnings (GDPR gaps, zero conversions, attribution mismatches, orphaned URLs).
 
+**`analyze_campaign_conversions` details:** Returns one row per campaign (with `campaign_id`) including `conversion_discrepancy_pct` between Ads and GA4. When `campaign_name` is omitted, all campaigns are returned — no need to call once per campaign.
+
 ### Tracking Tools
 
 | Tool | When to Use | Key Parameters |
 |------|-------------|----------------|
-| `validate_tracking` | Compare codebase event code against actual GA4 events — find missing/broken tracking | `expected_events` (list of event names found in code), `date_range_start`, `date_range_end` |
+| `validate_tracking` | Compare codebase event code against actual GA4 events — find missing/broken tracking | `expected_events` (list of event names found in code), `date_range_start`, `date_range_end`, `customer_id` (optional — cross-refs Ads conversion actions) |
 | `generate_tracking_code` | Generate ready-to-paste GA4 gtag JavaScript for an event | `event_name`, `event_params` (optional), `trigger` (form_submit/button_click/page_load) |
 
 `validate_tracking` requires the AI to first search the codebase for `gtag('event', ...)` or `dataLayer.push({event: ...})` calls, extract event names, then pass them to the tool. The tool queries GA4 and returns a structured comparison (matched, missing, unexpected, auto-collected).
