@@ -514,3 +514,274 @@ def attribution_check(
         "insights": insights,
         "date_range": {"start": start, "end": end},
     }
+
+
+# ---------------------------------------------------------------------------
+# Tool 4: analyze_pmax_performance
+# ---------------------------------------------------------------------------
+
+
+def analyze_pmax_performance(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    property_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """Performance Max diagnostic — campaign + asset groups + assets + channels + GA4.
+
+    Aggregates everything you can see about a PMax campaign in one place so the
+    AI can reason about it as a whole. Pulls campaign metrics, asset group ad
+    strength, individual asset performance labels, channel breakdown, and (when
+    a property is configured) GA4 paid sessions/conversions.
+
+    Returns auto-generated insights[] flagging:
+    - Asset groups with POOR or AVERAGE ad strength
+    - Assets labeled LOW that should be replaced
+    - Channel skew (e.g. 90%+ of spend going to a single surface)
+    - Zero-conversion campaigns despite spend
+    - GDPR consent gaps (click-to-session ratio > 2:1)
+    - Pre-2025-06-01 channel breakdown caveats
+    """
+    from adloop.ads.pmax_read import (
+        get_asset_group_assets,
+        get_asset_groups,
+        get_pmax_campaigns,
+        get_pmax_channel_breakdown,
+    )
+    from adloop.ga4.reports import run_ga4_report
+
+    start, end = _default_date_range(date_range_start, date_range_end)
+
+    campaigns_result = get_pmax_campaigns(
+        config, customer_id=customer_id,
+        date_range_start=start, date_range_end=end,
+    )
+    if "error" in campaigns_result:
+        return campaigns_result
+
+    pmax_campaigns = campaigns_result.get("campaigns", [])
+    if campaign_id:
+        pmax_campaigns = [
+            c for c in pmax_campaigns if str(c.get("campaign.id", "")) == str(campaign_id)
+        ]
+        if not pmax_campaigns:
+            return {
+                "error": f"No PMax campaign found with id {campaign_id}.",
+                "hint": "Use get_pmax_campaigns to list available campaigns.",
+            }
+
+    asset_groups_result = get_asset_groups(
+        config, customer_id=customer_id, campaign_id=campaign_id,
+        date_range_start=start, date_range_end=end,
+    )
+    asset_groups = asset_groups_result.get("asset_groups", [])
+
+    assets_result = get_asset_group_assets(
+        config, customer_id=customer_id, campaign_id=campaign_id,
+    )
+    assets = assets_result.get("assets", [])
+
+    channels_result = get_pmax_channel_breakdown(
+        config, customer_id=customer_id, campaign_id=campaign_id,
+        date_range_start=start, date_range_end=end,
+    )
+    channels = channels_result.get("channel_breakdown", [])
+
+    ga4_paid_by_campaign: dict[str, dict] = {}
+    ga4_warning: str | None = None
+    if property_id:
+        try:
+            ga4_result = run_ga4_report(
+                config, property_id=property_id,
+                dimensions=["sessionCampaignName", "sessionSource", "sessionMedium"],
+                metrics=["sessions", "conversions", "engagedSessions"],
+                date_range_start=start, date_range_end=end,
+                limit=1000,
+            )
+            if "error" in ga4_result:
+                ga4_warning = (
+                    f"GA4 data could not be fetched ({ga4_result['error']}) — "
+                    f"PMax metrics still shown but click-to-session and conversion "
+                    f"comparisons are unavailable."
+                )
+            else:
+                for row in ga4_result.get("rows", []):
+                    source = row.get("sessionSource", "")
+                    medium = row.get("sessionMedium", "")
+                    if source != "google" or medium != "cpc":
+                        continue
+                    name = row.get("sessionCampaignName", "")
+                    bucket = ga4_paid_by_campaign.setdefault(
+                        name, {"sessions": 0, "conversions": 0, "engaged": 0}
+                    )
+                    bucket["sessions"] += _safe_int(row.get("sessions", 0))
+                    bucket["conversions"] += _safe_int(row.get("conversions", 0))
+                    bucket["engaged"] += _safe_int(row.get("engagedSessions", 0))
+        except Exception as exc:
+            ga4_warning = (
+                f"GA4 query failed ({exc}) — PMax metrics still shown but "
+                f"click-to-session and conversion comparisons are unavailable."
+            )
+
+    assets_by_group: dict[str, list[dict]] = {}
+    for asset in assets:
+        ag_id = str(asset.get("asset_group.id", ""))
+        assets_by_group.setdefault(ag_id, []).append(asset)
+
+    channels_by_campaign: dict[str, list[dict]] = {}
+    for ch in channels:
+        cmp_id = str(ch.get("campaign.id", ""))
+        channels_by_campaign.setdefault(cmp_id, []).append(ch)
+
+    summaries = []
+    insights = []
+
+    for camp in pmax_campaigns:
+        cmp_id = str(camp.get("campaign.id", ""))
+        cmp_name = camp.get("campaign.name", "")
+
+        cmp_clicks = _safe_int(camp.get("metrics.clicks", 0))
+        cmp_cost = _safe_float(camp.get("metrics.cost", 0))
+        cmp_conv = _safe_float(camp.get("metrics.conversions", 0))
+        cmp_value = _safe_float(camp.get("metrics.conversions_value", 0))
+
+        ga4 = ga4_paid_by_campaign.get(cmp_name, {"sessions": 0, "conversions": 0})
+        click_session_ratio = _safe_div(cmp_clicks, ga4["sessions"])
+
+        cmp_groups = [
+            ag for ag in asset_groups
+            if str(ag.get("campaign.id", "")) == cmp_id
+        ]
+        weak_groups = [
+            ag for ag in cmp_groups
+            if ag.get("asset_group.ad_strength") in ("POOR", "AVERAGE")
+        ]
+
+        group_summaries = []
+        for ag in cmp_groups:
+            ag_id = str(ag.get("asset_group.id", ""))
+            ag_assets = assets_by_group.get(ag_id, [])
+
+            counts: dict[str, int] = {}
+            low_assets: list[dict] = []
+            for a in ag_assets:
+                ftype = a.get("asset_group_asset.field_type", "UNKNOWN")
+                counts[ftype] = counts.get(ftype, 0) + 1
+                if a.get("asset_group_asset.performance_label") == "LOW":
+                    low_assets.append({
+                        "asset_id": str(a.get("asset.id", "")),
+                        "field_type": ftype,
+                        "text": a.get("asset.text_asset.text"),
+                        "image_url": a.get("asset.image_asset.full_size.url"),
+                    })
+
+            group_summaries.append({
+                "asset_group_id": ag_id,
+                "asset_group_name": ag.get("asset_group.name", ""),
+                "ad_strength": ag.get("asset_group.ad_strength", ""),
+                "asset_counts_by_type": counts,
+                "low_performing_assets": low_assets,
+                "metrics": {
+                    "cost": _safe_float(ag.get("metrics.cost", 0)),
+                    "clicks": _safe_int(ag.get("metrics.clicks", 0)),
+                    "conversions": _safe_float(ag.get("metrics.conversions", 0)),
+                },
+            })
+
+            if low_assets:
+                insights.append(
+                    f"{cmp_name} / {ag.get('asset_group.name', '')}: "
+                    f"{len(low_assets)} LOW-performing asset(s) — "
+                    f"review the low_performing_assets list and replace these in Google Ads"
+                )
+
+            if ag.get("asset_group.ad_strength") in ("POOR", "AVERAGE"):
+                insights.append(
+                    f"{cmp_name} / {ag.get('asset_group.name', '')}: "
+                    f"ad strength is {ag.get('asset_group.ad_strength')} — "
+                    f"add more headlines/descriptions/images to improve"
+                )
+
+        cmp_channels = channels_by_campaign.get(cmp_id, [])
+        channel_summary = []
+        total_channel_cost = sum(
+            _safe_float(c.get("metrics.cost", 0)) for c in cmp_channels
+        )
+        for ch in cmp_channels:
+            ch_cost = _safe_float(ch.get("metrics.cost", 0))
+            share = _safe_div(ch_cost, total_channel_cost)
+            channel_summary.append({
+                "ad_network_type": ch.get("segments.ad_network_type", ""),
+                "cost": ch_cost,
+                "clicks": _safe_int(ch.get("metrics.clicks", 0)),
+                "conversions": _safe_float(ch.get("metrics.conversions", 0)),
+                "spend_share": share,
+            })
+
+        if total_channel_cost > 0:
+            top = max(channel_summary, key=lambda c: c["cost"])
+            if top["spend_share"] is not None and top["spend_share"] > 0.90:
+                insights.append(
+                    f"{cmp_name}: {top['spend_share']:.0%} of spend going to "
+                    f"{top['ad_network_type']} — channel mix is heavily skewed, "
+                    f"consider whether other surfaces are being suppressed"
+                )
+
+        if cmp_cost > 0 and cmp_conv == 0:
+            insights.append(
+                f"{cmp_name}: €{cmp_cost:.2f} spend with 0 conversions — "
+                f"check that conversion goals are linked and tracking fires"
+            )
+
+        if click_session_ratio is not None and click_session_ratio > 2.0 and cmp_clicks > 5:
+            lost_pct = round((1 - 1 / click_session_ratio) * 100)
+            insights.append(
+                f"{cmp_name}: click-to-session ratio is {click_session_ratio:.1f}:1 "
+                f"— ~{lost_pct}% of paid clicks not in GA4 (likely GDPR consent)"
+            )
+
+        summaries.append({
+            "campaign_id": cmp_id,
+            "campaign_name": cmp_name,
+            "campaign_status": camp.get("campaign.status", ""),
+            "bidding_strategy_type": camp.get("campaign.bidding_strategy_type", ""),
+            "url_expansion_opt_out": camp.get("campaign.url_expansion_opt_out"),
+            "brand_guidelines_enabled": camp.get("campaign.brand_guidelines_enabled"),
+            "daily_budget": camp.get("campaign_budget.amount"),
+            "metrics": {
+                "clicks": cmp_clicks,
+                "cost": cmp_cost,
+                "conversions": cmp_conv,
+                "conversions_value": cmp_value,
+                "cpa": camp.get("metrics.cpa"),
+                "roas": camp.get("metrics.roas"),
+            },
+            "ga4_paid": {
+                "sessions": ga4["sessions"],
+                "conversions": ga4["conversions"],
+                "click_to_session_ratio": click_session_ratio,
+            } if property_id and ga4_warning is None else None,
+            "asset_groups": group_summaries,
+            "weak_asset_groups": len(weak_groups),
+            "channel_breakdown": channel_summary,
+        })
+
+    insights.extend(channels_result.get("insights", []))
+    if ga4_warning:
+        insights.append(ga4_warning)
+
+    if not pmax_campaigns:
+        insights.append(
+            "No Performance Max campaigns found in this account for the date range. "
+            "If you expected to see campaigns, check campaign.status filters or date range."
+        )
+
+    return {
+        "campaigns": summaries,
+        "total_campaigns": len(summaries),
+        "insights": insights,
+        "date_range": {"start": start, "end": end},
+    }

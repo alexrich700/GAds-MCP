@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 # Pin the API version so library upgrades don't silently break field names,
 # enum values, or mutate operation structures. Bump this deliberately when
 # migrating to a new API version — never let it float to the library default.
-GOOGLE_ADS_API_VERSION = "v23"
+GOOGLE_ADS_API_VERSION = "v24"
 
 
 def get_ads_client(config: AdLoopConfig) -> GoogleAdsClient:

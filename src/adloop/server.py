@@ -700,6 +700,251 @@ def attribution_check(
     )
 
 
+# ---------------------------------------------------------------------------
+# Performance Max Read Tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_pmax_campaigns(
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+) -> dict:
+    """Get Performance Max campaigns with PMax-specific settings and metrics.
+
+    Returns: campaign id/name/status, bidding strategy, URL expansion setting,
+    brand guidelines flag, daily budget, impressions, clicks, cost, conversions,
+    conversions_value, CPA, and ROAS for each PMax campaign.
+
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.pmax_read import get_pmax_campaigns as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_pmax_channel_breakdown(
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """Get PMax spend/clicks/conversions per serving surface (Search/Display/YouTube/etc.).
+
+    Uses segments.ad_network_type to break down where PMax actually served.
+    Channel-level data is only reliable from 2025-06-01 onwards — earlier
+    rows return MIXED. The tool emits a warning in insights when the date
+    range overlaps that period.
+
+    campaign_id: optional filter to a single campaign.
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.pmax_read import get_pmax_channel_breakdown as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        campaign_id=campaign_id,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_asset_groups(
+    customer_id: str = "",
+    campaign_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+) -> dict:
+    """List PMax asset groups with their final URLs, paths, ad strength, and metrics.
+
+    Asset groups are the PMax equivalent of ad groups — each contains a bundle
+    of assets (headlines, descriptions, images, logos, videos) that Google
+    assembles dynamically. Ad strength values: POOR | AVERAGE | GOOD | EXCELLENT.
+
+    campaign_id: optional filter to a single campaign.
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.pmax_read import get_asset_groups as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_id=campaign_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_asset_group_assets(
+    customer_id: str = "",
+    asset_group_id: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """List individual assets in PMax asset groups with field type and performance label.
+
+    Returns asset id/type, field_type (HEADLINE, DESCRIPTION, MARKETING_IMAGE,
+    LOGO, YOUTUBE_VIDEO, etc.), performance_label (LOW, GOOD, BEST, PENDING),
+    text content, image URL, or YouTube video id/title/url depending on type.
+
+    Use this to identify LOW-performing assets that should be replaced.
+    Provide either asset_group_id (single group) or campaign_id (all groups in
+    the campaign). With both empty, returns all assets across all PMax campaigns.
+    """
+    from adloop.ads.pmax_read import get_asset_group_assets as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        asset_group_id=asset_group_id,
+        campaign_id=campaign_id,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_asset_group_signals(
+    customer_id: str = "",
+    asset_group_id: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """List audience and search-theme signals attached to PMax asset groups.
+
+    Signals are not hard targeting — they are hints to Google's algorithm about
+    who and what kind of search intent the asset group should match. Each row
+    has signal_type = SEARCH_THEME or AUDIENCE.
+
+    Provide either asset_group_id or campaign_id. Both empty returns all signals
+    across all PMax campaigns.
+    """
+    from adloop.ads.pmax_read import get_asset_group_signals as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        asset_group_id=asset_group_id,
+        campaign_id=campaign_id,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_asset_group_top_combinations(
+    customer_id: str = "",
+    asset_group_id: str = "",
+    campaign_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+) -> dict:
+    """Get top-performing asset combinations Google has assembled at serve time.
+
+    Each row represents a unique combination (headline + description + image +
+    optional video) that has actually served, with its impression count.
+    Use this to understand which message/creative pairings work best.
+
+    Provide either asset_group_id or campaign_id. Returns up to 50 rows ordered
+    by impressions DESC.
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.pmax_read import get_asset_group_top_combinations as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        asset_group_id=asset_group_id,
+        campaign_id=campaign_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_pmax_search_terms(
+    campaign_id: str,
+    customer_id: str = "",
+    date_range_start: str = "",
+    date_range_end: str = "",
+) -> dict:
+    """Get aggregated search-term category insights for a Performance Max campaign.
+
+    Note: PMax does NOT expose individual search terms (Google's design choice).
+    This returns category labels (e.g. "Buy women's running shoes") aggregated
+    across many real queries, with metrics. Useful for understanding what
+    search themes the campaign is matching.
+
+    campaign_id is REQUIRED — these insights are queried per-campaign.
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.ads.pmax_read import get_pmax_search_terms as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_id=campaign_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def analyze_pmax_performance(
+    date_range_start: str = "",
+    date_range_end: str = "",
+    customer_id: str = "",
+    property_id: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """Comprehensive PMax diagnostic — campaign + asset groups + assets + channels + GA4.
+
+    Pulls everything you can inspect about Performance Max in one call:
+    campaign metrics + bidding/URL-expansion/brand-guidelines settings, every
+    asset group with its ad strength, individual asset performance labels,
+    channel-mix breakdown, and (when property_id is configured) GA4 paid
+    sessions/conversions per campaign.
+
+    Returns auto-generated insights[] flagging:
+    - Asset groups with POOR or AVERAGE ad strength
+    - Individual assets labeled LOW that should be replaced
+    - Channel skew (e.g. >90% of spend on a single surface)
+    - Zero-conversion campaigns despite spend
+    - GDPR consent gaps (click-to-session ratio > 2:1)
+    - Pre-2025-06-01 channel breakdown caveats
+
+    campaign_id: optional filter — when provided, returns only that PMax campaign.
+    Date format: "YYYY-MM-DD". Empty = last 30 days.
+    """
+    from adloop.crossref import analyze_pmax_performance as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        property_id=property_id or _config.ga4.property_id,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        campaign_id=campaign_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Custom GAQL
+# ---------------------------------------------------------------------------
+
+
 @mcp.tool(annotations=_READONLY)
 @_safe
 def run_gaql(
