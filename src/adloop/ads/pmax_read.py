@@ -70,10 +70,11 @@ def get_pmax_channel_breakdown(
 ) -> dict:
     """Get spend/conversions per serving surface (Search, Display, YouTube, Shopping, etc.).
 
-    Uses segments.asset_interaction_target.interaction_on_this_asset = false to
-    isolate the channel attribution segment. Pre-2025-06-01 data returns MIXED
-    for most rows — a warning is added to insights when the date range overlaps
-    that period.
+    Segments the campaign-level metrics by `segments.ad_network_type`. Channel
+    attribution for PMax is only reliable from 2025-06-01 onwards — earlier
+    rows return MIXED because Google could not attribute a specific channel.
+    The tool emits a warning in `insights[]` when the date range overlaps that
+    period or when MIXED rows are present in the result.
     """
     from adloop.ads.gaql import execute_query
 
@@ -308,10 +309,10 @@ def get_pmax_search_terms(
 ) -> dict:
     """Get aggregated search-category insights for PMax (post-v23.2 surface).
 
-    Tries `campaign_search_term_insight` first (the v23.2+ resource) and falls
-    back to category-only insights if the account doesn't yet support the
-    expanded view. Returns category labels and metrics — individual search terms
-    are NOT exposed for PMax campaigns by Google's design.
+    Queries `campaign_search_term_insight` (the v23.2+ resource). Returns
+    category labels and metrics — individual search terms are NOT exposed for
+    PMax campaigns by Google's design. Returns a structured error with a hint
+    when the resource isn't available on the configured API version.
     """
     from adloop.ads.gaql import execute_query
 

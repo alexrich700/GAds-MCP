@@ -17,7 +17,7 @@ python scripts/sync-rules.py  # Sync rules: .cursor/rules/ -> .claude/rules/
 ```
 src/adloop/
 ├── __init__.py        # Entry point — routes 'adloop init' vs MCP server
-├── server.py          # FastMCP server — 37 tool registrations (incl. 8 PMax)
+├── server.py          # FastMCP server — 47 tool registrations (incl. 8 PMax)
 ├── config.py          # Config loader (~/.adloop/config.yaml)
 ├── auth.py            # OAuth 2.0 + service account + token refresh
 ├── cli.py             # Interactive setup wizard
@@ -34,10 +34,10 @@ All tool usage rules, safety protocols, orchestration patterns, GAQL reference, 
 
 **Read and follow `.claude/rules/adloop.md` for all AdLoop MCP tool orchestration.**
 
-That file is the complete guide for combining AdLoop's 37 tools (Search + Performance Max). It covers:
+That file is the complete guide for combining AdLoop's 47 tools (Search + Performance Max). It covers:
 - Tool inventory with parameters and when to use each
 - 8 safety rules (budget caps, dry-run defaults, Broad Match prevention, pre-write validation)
-- 13 orchestration patterns (performance review, ad creation, tracking diagnosis, PMax diagnostics, etc.)
+- 16 orchestration patterns (performance review, ad creation, tracking diagnosis, PMax diagnostics, etc.)
 - GAQL quick reference with syntax, common queries, and gotchas (incl. asset_group, asset_group_asset)
 - GDPR consent awareness for EU markets
 - Ad copy character limits and marketing best practices (incl. PMax-specific notes)

@@ -591,6 +591,7 @@ def analyze_pmax_performance(
     channels = channels_result.get("channel_breakdown", [])
 
     ga4_paid_by_campaign: dict[str, dict] = {}
+    ga4_warning: str | None = None
     if property_id:
         try:
             ga4_result = run_ga4_report(
@@ -600,20 +601,30 @@ def analyze_pmax_performance(
                 date_range_start=start, date_range_end=end,
                 limit=1000,
             )
-            for row in ga4_result.get("rows", []):
-                source = row.get("sessionSource", "")
-                medium = row.get("sessionMedium", "")
-                if source != "google" or medium != "cpc":
-                    continue
-                name = row.get("sessionCampaignName", "")
-                bucket = ga4_paid_by_campaign.setdefault(
-                    name, {"sessions": 0, "conversions": 0, "engaged": 0}
+            if "error" in ga4_result:
+                ga4_warning = (
+                    f"GA4 data could not be fetched ({ga4_result['error']}) — "
+                    f"PMax metrics still shown but click-to-session and conversion "
+                    f"comparisons are unavailable."
                 )
-                bucket["sessions"] += _safe_int(row.get("sessions", 0))
-                bucket["conversions"] += _safe_int(row.get("conversions", 0))
-                bucket["engaged"] += _safe_int(row.get("engagedSessions", 0))
-        except Exception:
-            ga4_paid_by_campaign = {}
+            else:
+                for row in ga4_result.get("rows", []):
+                    source = row.get("sessionSource", "")
+                    medium = row.get("sessionMedium", "")
+                    if source != "google" or medium != "cpc":
+                        continue
+                    name = row.get("sessionCampaignName", "")
+                    bucket = ga4_paid_by_campaign.setdefault(
+                        name, {"sessions": 0, "conversions": 0, "engaged": 0}
+                    )
+                    bucket["sessions"] += _safe_int(row.get("sessions", 0))
+                    bucket["conversions"] += _safe_int(row.get("conversions", 0))
+                    bucket["engaged"] += _safe_int(row.get("engagedSessions", 0))
+        except Exception as exc:
+            ga4_warning = (
+                f"GA4 query failed ({exc}) — PMax metrics still shown but "
+                f"click-to-session and conversion comparisons are unavailable."
+            )
 
     assets_by_group: dict[str, list[dict]] = {}
     for asset in assets:
@@ -684,7 +695,7 @@ def analyze_pmax_performance(
                 insights.append(
                     f"{cmp_name} / {ag.get('asset_group.name', '')}: "
                     f"{len(low_assets)} LOW-performing asset(s) — "
-                    f"replace via draft_pmax_assets + replace_pmax_asset"
+                    f"review the low_performing_assets list and replace these in Google Ads"
                 )
 
             if ag.get("asset_group.ad_strength") in ("POOR", "AVERAGE"):
@@ -759,6 +770,8 @@ def analyze_pmax_performance(
         })
 
     insights.extend(channels_result.get("insights", []))
+    if ga4_warning:
+        insights.append(ga4_warning)
 
     if not pmax_campaigns:
         insights.append(
