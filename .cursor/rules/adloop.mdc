@@ -48,6 +48,30 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 - `get_keyword_performance` returns `ad_group.id`, `ad_group.name`, and `ad_group_criterion.criterion_id` — use these to construct `entity_id` strings (e.g. `"adGroupId~criterionId"`) for `pause_entity` calls, and `ad_group.name` for human-readable reporting.
 - `get_search_terms` returns `campaign.id` and `metrics.cost` per search term — use `campaign.id` for `add_negative_keywords`, and cost for negative keyword analysis (flag terms spending > 2-3x CPA with zero conversions).
 
+### Performance Max Read Tools
+
+Performance Max (PMax) campaigns have a different structure than Search:
+- **No ad groups, no keywords, no individual ads.** Instead, an `asset_group` bundles assets (headlines, descriptions, images, logos, videos) that Google assembles dynamically per impression.
+- **Channel is decided at serve time.** A PMax campaign can serve on Search, Display, YouTube, Gmail, Discover, Maps, or Shopping — Google chooses based on signals.
+- **Search terms are not exposed individually.** PMax surfaces aggregated category-level insights only.
+
+| Tool | When to Use | Key Parameters |
+|------|-------------|----------------|
+| `get_pmax_campaigns` | Discover PMax campaigns and their PMax-specific settings (URL expansion, brand guidelines) | `date_range_start`, `date_range_end` |
+| `get_pmax_channel_breakdown` | "Where is my PMax spend going?" — Search vs YouTube vs Display etc. | `date_range_start`, `date_range_end`, `campaign_id` (optional) |
+| `get_asset_groups` | List asset groups in a PMax campaign with ad strength + metrics | `campaign_id` (optional), `date_range_start`, `date_range_end` |
+| `get_asset_group_assets` | Inspect every asset's `field_type`, `performance_label` (LOW/GOOD/BEST/PENDING), and content | `asset_group_id` OR `campaign_id` |
+| `get_asset_group_signals` | List search themes and audience signals attached to an asset group | `asset_group_id` OR `campaign_id` |
+| `get_asset_group_top_combinations` | See which headline+description+image combos Google assembled and how often they served | `asset_group_id` OR `campaign_id`, `date_range_start`, `date_range_end` |
+| `get_pmax_search_terms` | Get aggregated category-level insights (not individual queries) for a PMax campaign | `campaign_id` (REQUIRED), `date_range_start`, `date_range_end` |
+
+**PMax read tool notes:**
+- `get_pmax_campaigns` returns `metrics.cost`, `metrics.cpa`, `metrics.roas`, and `campaign_budget.amount` pre-computed. The Search-style `bidding_strategy_type` is shown — for PMax it's typically `MAXIMIZE_CONVERSIONS` or `MAXIMIZE_CONVERSION_VALUE` (Smart Bidding only).
+- `get_pmax_channel_breakdown` is only reliable from **2025-06-01 onwards**. Earlier rows return `MIXED` for `segments.ad_network_type` because Google could not attribute. The tool emits a warning in `insights[]` when the date range overlaps that period.
+- `get_asset_group_assets` returns `asset_group_asset.performance_label` — values are `LOW`, `GOOD`, `BEST`, `PENDING`. `PENDING` means Google hasn't gathered enough data yet (typically the first 1-2 weeks). `LOW` assets are clear replacement candidates.
+- `get_asset_group_signals` returns `signal_type = SEARCH_THEME | AUDIENCE | UNKNOWN`. Search themes are immutable once created — to "edit", you remove and re-create.
+- `get_pmax_search_terms` requires API v23.2+. Returns category labels only — Google deliberately does NOT expose individual search queries for PMax campaigns. Don't tell users they can see exactly what someone typed.
+
 ### Cross-Reference Tools (GA4 + Ads combined)
 
 | Tool | When to Use | Key Parameters |
@@ -55,10 +79,13 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 | `analyze_campaign_conversions` | "What's my real CPA?", paid vs organic comparison, GDPR gap analysis | `date_range_start`, `date_range_end`, `campaign_name` (optional filter) |
 | `landing_page_analysis` | "Which landing pages convert?", identify pages with traffic but no conversions | `date_range_start`, `date_range_end` |
 | `attribution_check` | "Are my conversions tracked correctly?", Ads vs GA4 conversion discrepancies | `date_range_start`, `date_range_end`, `conversion_events` (optional GA4 event names) |
+| `analyze_pmax_performance` | One-call PMax diagnostic — campaign + asset groups + asset performance labels + channel mix + GA4 | `date_range_start`, `date_range_end`, `campaign_id` (optional filter) |
 
 These tools call both APIs internally and return unified results with computed `insights[]`. They are read-only — no mutations. Each returns a `date_range` and auto-generates conditional warnings (GDPR gaps, zero conversions, attribution mismatches, orphaned URLs).
 
 **`analyze_campaign_conversions` details:** Returns one row per campaign (with `campaign_id`) including `conversion_discrepancy_pct` between Ads and GA4. When `campaign_name` is omitted, all campaigns are returned — no need to call once per campaign.
+
+**`analyze_pmax_performance` details:** Aggregates everything you can see about Performance Max in one call: campaign metrics + bidding/URL-expansion/brand-guidelines settings, every asset group with its `ad_strength`, individual asset `performance_label`s, the channel-mix breakdown, and (when a GA4 property is configured) GA4 paid sessions/conversions per campaign. The `insights[]` flag POOR/AVERAGE asset groups, LOW-labeled assets, channel-spend skew (>90% on a single surface), zero-conversion campaigns, GDPR consent gaps, and pre-2025-06-01 data caveats. Use this as the FIRST call when the user asks about PMax performance — it eliminates 4-5 separate read tool calls.
 
 ### Tracking Tools
 
@@ -162,6 +189,17 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 4. Present a summary with the key metrics: spend (`metrics.cost`), clicks, conversions, CPA (`metrics.cpa`), CTR
 5. Highlight anything concerning: zero conversions, high CPA, low quality scores, wasteful search terms
 6. Compare against best practices (see Marketing Best Practices section)
+
+### When user asks about Performance Max performance
+
+PMax is structurally different from Search — different tools, different diagnostics, different levers.
+
+1. **Default to `analyze_pmax_performance`.** It pulls campaign + asset groups + assets + channel breakdown + GA4 in one call and returns auto-generated `insights[]`. Don't manually chain `get_pmax_campaigns` + `get_asset_groups` + `get_asset_group_assets` unless you need data the cross-ref tool doesn't surface.
+2. If the user asks specifically about creative quality: present the asset groups sorted by `ad_strength`, then drill into LOW-labeled assets via the `low_performing_assets` arrays.
+3. If the user asks "where is my budget going?": use the `channel_breakdown` array and emphasize that PMax decides channel mix at serve time. If one channel dominates (>90%), that's worth flagging — Google may be suppressing other surfaces due to weak creative for those formats.
+4. **Do NOT compare PMax CPA to Search CPA directly.** PMax includes Display, YouTube, and Discovery surfaces that have intrinsically different conversion dynamics. Compare PMax CPA to the campaign's `target_cpa` (if set) or to historical PMax CPA, not to a Search benchmark.
+5. **Search terms work differently for PMax.** When users ask "what are people searching for" — explain that PMax does NOT expose individual queries (Google's design), only aggregated category labels via `get_pmax_search_terms`. Don't promise data the API doesn't return.
+6. **GDPR consent gaps apply identically** — the click-to-session ratio insight in `analyze_pmax_performance` factors this in.
 
 ### When user asks about conversions or conversion drops
 
@@ -358,6 +396,11 @@ LIMIT n
 | `campaign_budget` | Budget information |
 | `bidding_strategy` | Bidding strategy details |
 | `customer_client` | List accounts under an MCC (uses login_customer_id) |
+| `asset_group` | Performance Max asset groups (PMax equivalent of ad groups) |
+| `asset_group_asset` | Individual assets in PMax asset groups with field_type + performance_label |
+| `asset_group_signal` | Search themes and audience signals attached to PMax asset groups |
+| `asset_group_top_combination_view` | Top serving combinations Google has assembled for PMax |
+| `campaign_search_term_insight` | Aggregated PMax search-term categories (v23.2+, no individual queries) |
 
 ### Common Fields
 
@@ -390,7 +433,16 @@ LIMIT n
 **Segments (for time-based breakdowns):**
 - `segments.date` — daily breakdown
 - `segments.device` — MOBILE, DESKTOP, TABLET
-- `segments.ad_network_type` — SEARCH, CONTENT, YOUTUBE
+- `segments.ad_network_type` — SEARCH, CONTENT, YOUTUBE_WATCH, YOUTUBE_SEARCH, MIXED (PMax channel breakdown — only reliable from 2025-06-01 onwards)
+
+**Performance Max fields:**
+- `campaign.advertising_channel_type = 'PERFORMANCE_MAX'` — filter for PMax campaigns
+- `campaign.url_expansion_opt_out` — boolean; when true, PMax only sends traffic to provided final URLs
+- `campaign.brand_guidelines_enabled` — boolean; when true, business name + logos are at campaign level not asset group
+- `asset_group.id`, `asset_group.name`, `asset_group.status`, `asset_group.ad_strength` (POOR/AVERAGE/GOOD/EXCELLENT)
+- `asset_group_asset.field_type` (HEADLINE, DESCRIPTION, MARKETING_IMAGE, LOGO, YOUTUBE_VIDEO, etc.)
+- `asset_group_asset.performance_label` (LOW, GOOD, BEST, PENDING)
+- `asset_group_signal.search_theme.text`, `asset_group_signal.audience.audience`
 
 ### Date Ranges
 
@@ -447,6 +499,26 @@ LIMIT 20
 SELECT ad_group.id, ad_group.name, ad_group.status
 FROM ad_group
 WHERE campaign.id = 12345678
+```
+
+**Performance Max asset groups with ad strength:**
+```sql
+SELECT asset_group.id, asset_group.name, asset_group.ad_strength,
+       campaign.name, metrics.cost_micros, metrics.conversions
+FROM asset_group
+WHERE campaign.advertising_channel_type = 'PERFORMANCE_MAX'
+  AND segments.date DURING LAST_30_DAYS
+ORDER BY metrics.cost_micros DESC
+```
+
+**Performance Max LOW-performing assets (replacement candidates):**
+```sql
+SELECT asset_group.id, asset_group.name,
+       asset_group_asset.field_type, asset.text_asset.text,
+       asset.image_asset.full_size.url
+FROM asset_group_asset
+WHERE asset_group_asset.performance_label = 'LOW'
+  AND asset_group_asset.status != 'REMOVED'
 ```
 
 ## Ad Copy Character Limits
@@ -521,3 +593,4 @@ When advising on Google Ads:
 - **Display paths**: Always set `path1` and `path2` on RSAs. They cost nothing, improve ad relevance, and make the display URL informative (e.g. `example.com/Features/Pricing` instead of bare `example.com`). Derive them from the landing page path or the ad's core message. Max 15 chars each.
 - **Sitelinks**: Every campaign should have at least 4 sitelinks. They increase ad real estate (more screen space = higher CTR), direct users to key pages, and are free. Good candidates: pricing, features, signup/trial, about, key product pages. Use `draft_sitelinks` to create them. Link text max 25 chars, descriptions max 35 chars each.
 - **Clicks vs sessions gap**: Never report a clicks > sessions discrepancy as a tracking bug without first accounting for GDPR consent. In the EU, 30-70% of users may reject analytics cookies. This is normal, not broken.
+- **Performance Max specifics**: PMax campaigns are Smart Bidding only (`MAXIMIZE_CONVERSIONS` or `MAXIMIZE_CONVERSION_VALUE`) — no MANUAL_CPC option, so the BROAD-match-without-Smart-Bidding rule doesn't apply. Channel mix is decided by Google at serve time; you cannot directly target Search-only or YouTube-only. Asset groups should ideally have `ad_strength = GOOD` or better and zero `LOW`-labeled assets — replace LOW assets first before touching budget. PMax search-term insights expose categories only, not individual queries.
