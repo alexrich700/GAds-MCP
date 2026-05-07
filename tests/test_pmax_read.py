@@ -661,6 +661,84 @@ class TestAnalyzePmaxPerformance:
         assert "error" in result
         assert "999" in result["error"]
 
+    @patch("adloop.ga4.reports.run_ga4_report")
+    @patch("adloop.ads.pmax_read.get_pmax_channel_breakdown")
+    @patch("adloop.ads.pmax_read.get_asset_group_assets")
+    @patch("adloop.ads.pmax_read.get_asset_groups")
+    @patch("adloop.ads.pmax_read.get_pmax_campaigns")
+    def test_ga4_paid_is_none_when_ga4_fails(
+        self, mock_camps, mock_groups, mock_assets, mock_channels, mock_ga4, config
+    ):
+        """When GA4 returns an error, ga4_paid must be None — not zeros that
+        look like real data. Otherwise consumers can't distinguish 'GA4
+        unavailable' from 'campaign actually has zero paid sessions'."""
+        mock_camps.return_value = {
+            "campaigns": [
+                {
+                    "campaign.id": 111,
+                    "campaign.name": "PMax A",
+                    "campaign.status": "ENABLED",
+                    "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
+                    "metrics.clicks": 100,
+                    "metrics.cost": 40.0,
+                    "metrics.conversions": 4,
+                    "metrics.conversions_value": 400.0,
+                }
+            ]
+        }
+        mock_groups.return_value = {"asset_groups": []}
+        mock_assets.return_value = {"assets": []}
+        mock_channels.return_value = {"channel_breakdown": [], "insights": []}
+        mock_ga4.return_value = {"error": "GA4 property not configured"}
+
+        result = analyze_pmax_performance(
+            config,
+            customer_id="1234567890",
+            property_id="properties/123456",
+        )
+
+        # ga4_paid must be None, NOT a zero-filled dict
+        assert result["campaigns"][0]["ga4_paid"] is None
+        # The warning should be in insights so the user knows why
+        ga4_warnings = [i for i in result["insights"] if "GA4" in i]
+        assert len(ga4_warnings) >= 1
+
+    @patch("adloop.ga4.reports.run_ga4_report")
+    @patch("adloop.ads.pmax_read.get_pmax_channel_breakdown")
+    @patch("adloop.ads.pmax_read.get_asset_group_assets")
+    @patch("adloop.ads.pmax_read.get_asset_groups")
+    @patch("adloop.ads.pmax_read.get_pmax_campaigns")
+    def test_ga4_paid_is_none_when_ga4_raises(
+        self, mock_camps, mock_groups, mock_assets, mock_channels, mock_ga4, config
+    ):
+        """Same guarantee when GA4 raises rather than returning an error dict."""
+        mock_camps.return_value = {
+            "campaigns": [
+                {
+                    "campaign.id": 111,
+                    "campaign.name": "PMax A",
+                    "campaign.status": "ENABLED",
+                    "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
+                    "metrics.clicks": 100,
+                    "metrics.cost": 40.0,
+                    "metrics.conversions": 4,
+                    "metrics.conversions_value": 400.0,
+                }
+            ]
+        }
+        mock_groups.return_value = {"asset_groups": []}
+        mock_assets.return_value = {"assets": []}
+        mock_channels.return_value = {"channel_breakdown": [], "insights": []}
+        mock_ga4.side_effect = RuntimeError("network down")
+
+        result = analyze_pmax_performance(
+            config,
+            customer_id="1234567890",
+            property_id="properties/123456",
+        )
+
+        assert result["campaigns"][0]["ga4_paid"] is None
+
     @patch("adloop.ads.pmax_read.get_pmax_channel_breakdown")
     @patch("adloop.ads.pmax_read.get_asset_group_assets")
     @patch("adloop.ads.pmax_read.get_asset_groups")

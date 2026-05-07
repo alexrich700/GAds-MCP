@@ -763,7 +763,7 @@ def analyze_pmax_performance(
                 "sessions": ga4["sessions"],
                 "conversions": ga4["conversions"],
                 "click_to_session_ratio": click_session_ratio,
-            } if property_id else None,
+            } if property_id and ga4_warning is None else None,
             "asset_groups": group_summaries,
             "weak_asset_groups": len(weak_groups),
             "channel_breakdown": channel_summary,
