@@ -50,7 +50,6 @@ class TestGetPmaxCampaigns:
                 "campaign.status": "ENABLED",
                 "campaign.advertising_channel_type": "PERFORMANCE_MAX",
                 "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
-                "campaign.url_expansion_opt_out": False,
                 "campaign.brand_guidelines_enabled": True,
                 "campaign_budget.amount_micros": 25_000_000,
                 "metrics.impressions": 10_000,
@@ -263,8 +262,8 @@ class TestGetAssetGroupAssets:
                 "asset_group.id": 555,
                 "asset_group.name": "Group 1",
                 "asset_group_asset.field_type": "YOUTUBE_VIDEO",
-                "asset_group_asset.performance_label": "GOOD",
                 "asset_group_asset.status": "ENABLED",
+                "asset_group_asset.policy_summary.review_status": "REVIEWED",
                 "asset.id": 999,
                 "asset.type": "YOUTUBE_VIDEO",
                 "asset.text_asset.text": None,
@@ -283,6 +282,16 @@ class TestGetAssetGroupAssets:
             row["asset.youtube_video_asset.youtube_url"]
             == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         )
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_does_not_select_dropped_v24_fields(self, mock_query, config):
+        """Verify the query no longer references fields removed in API v24."""
+        mock_query.return_value = []
+
+        get_asset_group_assets(config, customer_id="1234567890")
+
+        call_query = mock_query.call_args[0][2]
+        assert "performance_label" not in call_query
 
     @patch("adloop.ads.gaql.execute_query")
     def test_asset_group_id_filter(self, mock_query, config):
@@ -370,7 +379,6 @@ class TestGetAssetGroupTopCombinations:
                 "asset_group.id": 555,
                 "asset_group.name": "Group 1",
                 "asset_group_top_combination_view.asset_group_top_combinations": "...",
-                "metrics.impressions": 1500,
                 "campaign.id": 111,
                 "campaign.name": "PMax A",
             }
@@ -381,6 +389,18 @@ class TestGetAssetGroupTopCombinations:
         )
 
         assert result["total_rows"] == 1
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_query_excludes_metrics(self, mock_query, config):
+        """asset_group_top_combination_view does not expose metrics.* in v24."""
+        mock_query.return_value = []
+
+        get_asset_group_top_combinations(config, customer_id="1234567890")
+
+        call_query = mock_query.call_args[0][2]
+        assert "metrics." not in call_query
+        # And cannot ORDER BY a metric we don't select.
+        assert "ORDER BY metrics" not in call_query
 
     @patch("adloop.ads.gaql.execute_query")
     def test_includes_limit(self, mock_query, config):
@@ -412,9 +432,6 @@ class TestGetPmaxSearchTerms:
                 "campaign_search_term_insight.category_label": "buy running shoes",
                 "metrics.impressions": 500,
                 "metrics.clicks": 30,
-                "metrics.cost_micros": 15_000_000,
-                "metrics.conversions": 2,
-                "metrics.conversions_value": 200.0,
             }
         ]
 
@@ -424,8 +441,25 @@ class TestGetPmaxSearchTerms:
 
         assert result["total_rows"] == 1
         row = result["search_term_categories"][0]
-        assert row["metrics.cost"] == 15.0
-        assert row["metrics.cpa"] == 7.5
+        assert row["metrics.impressions"] == 500
+        assert row["metrics.clicks"] == 30
+        # Per Google Ads API v24, cost/conversion metrics are not selectable
+        # on campaign_search_term_insight. The tool surfaces a `note` field
+        # so callers know cost is not available.
+        assert "note" in result
+
+    @patch("adloop.ads.gaql.execute_query")
+    def test_query_excludes_prohibited_metrics(self, mock_query, config):
+        """The API rejects cost_micros/conversions on campaign_search_term_insight."""
+        mock_query.return_value = []
+
+        get_pmax_search_terms(
+            config, customer_id="1234567890", campaign_id="111"
+        )
+
+        call_query = mock_query.call_args[0][2]
+        assert "cost_micros" not in call_query
+        assert "conversions" not in call_query
 
     @patch("adloop.ads.gaql.execute_query")
     def test_handles_unsupported_api_version(self, mock_query, config):
@@ -468,7 +502,6 @@ class TestAnalyzePmaxPerformance:
                     "campaign.name": "PMax A",
                     "campaign.status": "ENABLED",
                     "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
-                    "campaign.url_expansion_opt_out": False,
                     "campaign.brand_guidelines_enabled": True,
                     "campaign_budget.amount": 25.0,
                     "metrics.clicks": 200,
@@ -499,16 +532,14 @@ class TestAnalyzePmaxPerformance:
                     "asset.id": 999,
                     "asset_group.id": 555,
                     "asset_group_asset.field_type": "HEADLINE",
-                    "asset_group_asset.performance_label": "LOW",
-                    "asset.text_asset.text": "Bad headline",
+                    "asset.text_asset.text": "Headline 1",
                     "asset.image_asset.full_size.url": None,
                 },
                 {
                     "asset.id": 1000,
                     "asset_group.id": 555,
                     "asset_group_asset.field_type": "HEADLINE",
-                    "asset_group_asset.performance_label": "GOOD",
-                    "asset.text_asset.text": "Good headline",
+                    "asset.text_asset.text": "Headline 2",
                     "asset.image_asset.full_size.url": None,
                 },
             ]
@@ -558,17 +589,21 @@ class TestAnalyzePmaxPerformance:
         assert len(camp["asset_groups"]) == 1
         ag = camp["asset_groups"][0]
         assert ag["ad_strength"] == "POOR"
-        assert len(ag["low_performing_assets"]) == 1
         assert ag["asset_counts_by_type"]["HEADLINE"] == 2
+        # Asset group has only HEADLINEs — every other required type is missing.
+        # missing_asset_minimums lists each one with current vs needed counts.
+        assert len(ag["missing_asset_minimums"]) >= 5
         # Channel skew check: YouTube is ~94% of spend (75/80)
         skew_insights = [i for i in result["insights"] if "skewed" in i]
         assert len(skew_insights) == 1
         # POOR ad strength insight
         ad_strength_insights = [i for i in result["insights"] if "ad strength is POOR" in i]
         assert len(ad_strength_insights) == 1
-        # LOW asset insight
-        low_insights = [i for i in result["insights"] if "LOW-performing" in i]
-        assert len(low_insights) == 1
+        # Missing-asset-minimums insight (replaces the old LOW-performing-asset check)
+        minimums_insights = [
+            i for i in result["insights"] if "below minimums" in i
+        ]
+        assert len(minimums_insights) == 1
         # GA4 paid attached
         assert camp["ga4_paid"]["sessions"] == 60
         assert camp["ga4_paid"]["conversions"] == 5

@@ -39,7 +39,6 @@ def get_pmax_campaigns(
         SELECT campaign.id, campaign.name, campaign.status,
                campaign.advertising_channel_type,
                campaign.bidding_strategy_type,
-               campaign.url_expansion_opt_out,
                campaign.brand_guidelines_enabled,
                campaign_budget.amount_micros,
                metrics.impressions, metrics.clicks, metrics.cost_micros,
@@ -169,11 +168,13 @@ def get_asset_group_assets(
     asset_group_id: str = "",
     campaign_id: str = "",
 ) -> dict:
-    """List individual assets in PMax asset groups with field type and performance label.
+    """List individual assets in PMax asset groups with field type and policy review.
 
     Returns asset text/url, the field_type (HEADLINE, DESCRIPTION, MARKETING_IMAGE,
-    LOGO, YOUTUBE_VIDEO, etc.), and performance_label (LOW, GOOD, BEST, PENDING)
-    that Google assigns based on actual serving data.
+    LOGO, YOUTUBE_VIDEO, etc.), status, and policy review_status. The
+    LOW/GOOD/BEST/PENDING performance_label was removed from this resource in
+    Google Ads API v24 — to judge per-asset performance, query metrics directly
+    via asset_field_type_view or asset_group_top_combination_view.
     """
     from adloop.ads.gaql import execute_query
 
@@ -189,8 +190,8 @@ def get_asset_group_assets(
     query = f"""
         SELECT asset_group.id, asset_group.name,
                asset_group_asset.field_type,
-               asset_group_asset.performance_label,
                asset_group_asset.status,
+               asset_group_asset.policy_summary.review_status,
                asset.id, asset.type,
                asset.text_asset.text,
                asset.image_asset.full_size.url,
@@ -263,10 +264,12 @@ def get_asset_group_top_combinations(
     date_range_start: str = "",
     date_range_end: str = "",
 ) -> dict:
-    """Get top-performing asset combinations Google has assembled at serve time.
+    """Get the asset combinations Google has assembled at serve time.
 
-    Each row represents a unique combination of headline + description + image +
-    (optional) video that has actually served, with its impression count.
+    Each row's `asset_group_top_combination_view.asset_group_top_combinations`
+    is a repeated message of the assets that served together. The view does
+    NOT expose `metrics.*` fields in v24 — combinations come pre-ordered by
+    Google by serving frequency, so impression-level sorting is not available.
     """
     from adloop.ads.gaql import execute_query
 
@@ -284,13 +287,11 @@ def get_asset_group_top_combinations(
     query = f"""
         SELECT asset_group.id, asset_group.name,
                asset_group_top_combination_view.asset_group_top_combinations,
-               metrics.impressions,
                campaign.id, campaign.name
         FROM asset_group_top_combination_view
         WHERE campaign.advertising_channel_type = 'PERFORMANCE_MAX'
           {extra_filter}
           {date_clause}
-        ORDER BY metrics.impressions DESC
         LIMIT 50
     """
 
@@ -307,12 +308,14 @@ def get_pmax_search_terms(
     date_range_start: str = "",
     date_range_end: str = "",
 ) -> dict:
-    """Get aggregated search-category insights for PMax (post-v23.2 surface).
+    """Get aggregated search-category insights for PMax.
 
-    Queries `campaign_search_term_insight` (the v23.2+ resource). Returns
-    category labels and metrics — individual search terms are NOT exposed for
-    PMax campaigns by Google's design. Returns a structured error with a hint
-    when the resource isn't available on the configured API version.
+    Queries `campaign_search_term_insight`. Returns category labels with
+    impressions and clicks only — `metrics.cost_micros`, `metrics.conversions`,
+    and `metrics.conversions_value` are not selectable on this resource (the
+    API rejects them with PROHIBITED_METRIC_IN_SELECT_OR_WHERE_CLAUSE). Google
+    deliberately does not expose individual search queries for PMax campaigns,
+    only aggregated category labels.
     """
     from adloop.ads.gaql import execute_query
 
@@ -331,8 +334,7 @@ def get_pmax_search_terms(
     query = f"""
         SELECT campaign_search_term_insight.id,
                campaign_search_term_insight.category_label,
-               metrics.impressions, metrics.clicks, metrics.cost_micros,
-               metrics.conversions, metrics.conversions_value
+               metrics.impressions, metrics.clicks
         FROM campaign_search_term_insight
         WHERE campaign_search_term_insight.campaign_id = {cid}
           {date_clause}
@@ -354,10 +356,15 @@ def get_pmax_search_terms(
             }
         raise
 
-    _enrich_cost_fields(rows)
-    _enrich_roas(rows)
-
-    return {"search_term_categories": rows, "total_rows": len(rows)}
+    return {
+        "search_term_categories": rows,
+        "total_rows": len(rows),
+        "note": (
+            "metrics.cost, metrics.conversions, and metrics.conversions_value are "
+            "not exposed by the Google Ads API on campaign_search_term_insight — "
+            "PMax search-term insights show impression/click volume only."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------

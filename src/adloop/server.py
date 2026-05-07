@@ -714,9 +714,9 @@ def get_pmax_campaigns(
 ) -> dict:
     """Get Performance Max campaigns with PMax-specific settings and metrics.
 
-    Returns: campaign id/name/status, bidding strategy, URL expansion setting,
-    brand guidelines flag, daily budget, impressions, clicks, cost, conversions,
-    conversions_value, CPA, and ROAS for each PMax campaign.
+    Returns: campaign id/name/status, bidding strategy, brand guidelines flag,
+    daily budget, impressions, clicks, cost, conversions, conversions_value,
+    CPA, and ROAS for each PMax campaign.
 
     Date format: "YYYY-MM-DD". Empty = last 30 days.
     """
@@ -794,13 +794,17 @@ def get_asset_group_assets(
     asset_group_id: str = "",
     campaign_id: str = "",
 ) -> dict:
-    """List individual assets in PMax asset groups with field type and performance label.
+    """List individual assets in PMax asset groups with field type and policy review.
 
     Returns asset id/type, field_type (HEADLINE, DESCRIPTION, MARKETING_IMAGE,
-    LOGO, YOUTUBE_VIDEO, etc.), performance_label (LOW, GOOD, BEST, PENDING),
+    LOGO, YOUTUBE_VIDEO, etc.), status, policy_summary.review_status, and the
     text content, image URL, or YouTube video id/title/url depending on type.
 
-    Use this to identify LOW-performing assets that should be replaced.
+    Note: the LOW/GOOD/BEST/PENDING performance_label was removed from
+    asset_group_asset in Google Ads API v24. To judge per-asset performance
+    now, query metrics directly via asset_field_type_view, or use
+    get_asset_group_top_combinations to see which combinations actually serve.
+
     Provide either asset_group_id (single group) or campaign_id (all groups in
     the campaign). With both empty, returns all assets across all PMax campaigns.
     """
@@ -849,14 +853,15 @@ def get_asset_group_top_combinations(
     date_range_start: str = "",
     date_range_end: str = "",
 ) -> dict:
-    """Get top-performing asset combinations Google has assembled at serve time.
+    """Get the asset combinations Google has assembled at serve time for PMax.
 
-    Each row represents a unique combination (headline + description + image +
-    optional video) that has actually served, with its impression count.
-    Use this to understand which message/creative pairings work best.
+    Each row's asset_group_top_combinations field is a repeated message of
+    the assets that served together (headlines, descriptions, images, optional
+    video). The view does NOT expose metrics in v24 — the API rejects any
+    metrics.* field on this resource. Combinations come pre-ordered by Google
+    by serving frequency.
 
-    Provide either asset_group_id or campaign_id. Returns up to 50 rows ordered
-    by impressions DESC.
+    Provide either asset_group_id or campaign_id. Returns up to 50 rows.
     Date format: "YYYY-MM-DD". Empty = last 30 days.
     """
     from adloop.ads.pmax_read import get_asset_group_top_combinations as _impl
@@ -883,8 +888,10 @@ def get_pmax_search_terms(
 
     Note: PMax does NOT expose individual search terms (Google's design choice).
     This returns category labels (e.g. "Buy women's running shoes") aggregated
-    across many real queries, with metrics. Useful for understanding what
-    search themes the campaign is matching.
+    across many real queries, with impression and click counts. The Google Ads
+    API does NOT expose cost, conversions, or conversions_value on
+    campaign_search_term_insight (PROHIBITED_METRIC_IN_SELECT_OR_WHERE_CLAUSE),
+    so per-category cost is not available.
 
     campaign_id is REQUIRED — these insights are queried per-campaign.
     Date format: "YYYY-MM-DD". Empty = last 30 days.
@@ -912,14 +919,13 @@ def analyze_pmax_performance(
     """Comprehensive PMax diagnostic — campaign + asset groups + assets + channels + GA4.
 
     Pulls everything you can inspect about Performance Max in one call:
-    campaign metrics + bidding/URL-expansion/brand-guidelines settings, every
-    asset group with its ad strength, individual asset performance labels,
-    channel-mix breakdown, and (when property_id is configured) GA4 paid
-    sessions/conversions per campaign.
+    campaign metrics + bidding/brand-guidelines settings, every asset group
+    with its ad strength and asset counts, channel-mix breakdown, and (when
+    property_id is configured) GA4 paid sessions/conversions per campaign.
 
     Returns auto-generated insights[] flagging:
     - Asset groups with POOR or AVERAGE ad strength
-    - Individual assets labeled LOW that should be replaced
+    - Asset groups below the documented PMax asset-type minimums
     - Channel skew (e.g. >90% of spend on a single surface)
     - Zero-conversion campaigns despite spend
     - GDPR consent gaps (click-to-session ratio > 2:1)
@@ -937,6 +943,267 @@ def analyze_pmax_performance(
         date_range_start=date_range_start,
         date_range_end=date_range_end,
         campaign_id=campaign_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Performance Max Write Tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
+def draft_pmax_campaign(
+    campaign_name: str,
+    daily_budget: float,
+    bidding_strategy: str,
+    geo_target_ids: list[str],
+    language_ids: list[str],
+    asset_group: dict,
+    customer_id: str = "",
+    target_cpa: float = 0,
+    target_roas: float = 0,
+    final_url_suffix: str | None = None,
+) -> dict:
+    """Draft a Performance Max campaign with its first asset group — returns PREVIEW.
+
+    Creates: CampaignBudget + Campaign (PAUSED, no network_settings) + geo +
+    language + AssetGroup (PAUSED) + Assets + AssetGroupAsset links + Signals
+    in one atomic mutate. PMax requires this all-in-one shape.
+
+    bidding_strategy: PMax accepts only Smart Bidding —
+        MAXIMIZE_CONVERSIONS | MAXIMIZE_CONVERSION_VALUE | TARGET_CPA | TARGET_ROAS
+    target_cpa / target_roas: required when bidding_strategy is the matching name.
+    geo_target_ids / language_ids: REQUIRED — same constants as draft_campaign.
+
+    asset_group dict: see draft_pmax_campaign in pmax_write.py. Keys:
+        - name (str): asset group name
+        - final_urls (list[str]): at least one
+        - path1, path2 (str, optional, <=15 chars)
+        - headlines (list[str], 3-5, <=30 chars)
+        - long_headlines (list[str], 1-5, <=90 chars)
+        - descriptions (list[str], 2-5, <=90 chars)
+        - business_name (str, <=25 chars)
+        - marketing_image_assets (list[str]): resource_names of pre-uploaded
+          1.91:1 images. PMax requires at least one.
+        - square_marketing_image_assets (list[str]): resource_names of pre-
+          uploaded 1:1 images. At least one required.
+        - logo_assets (list[str]): resource_names of pre-uploaded logos. At
+          least one required.
+        - youtube_video_ids (list[str], optional)
+        - search_themes (list[str], optional): SearchTheme signal phrases
+        - audience_resource_names (list[str], optional): Audience resource_names
+
+    NOTE: image/logo assets cannot be created inline through this MCP — pre-
+    upload via Google Ads UI or AssetService.MutateAssets, then pass the
+    resource_name strings.
+
+    Call confirm_and_apply with the returned plan_id to execute. The new
+    campaign is created as PAUSED — enable_entity it after review.
+    """
+    from adloop.ads.pmax_write import draft_pmax_campaign as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_name=campaign_name,
+        daily_budget=daily_budget,
+        bidding_strategy=bidding_strategy,
+        target_cpa=target_cpa,
+        target_roas=target_roas,
+        geo_target_ids=geo_target_ids,
+        language_ids=language_ids,
+        final_url_suffix=final_url_suffix,
+        asset_group=asset_group,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
+def draft_asset_group(
+    campaign_id: str,
+    asset_group: dict,
+    customer_id: str = "",
+) -> dict:
+    """Draft a new asset group inside an existing PMax campaign — returns PREVIEW.
+
+    asset_group has the same shape as draft_pmax_campaign's asset_group field.
+    See that tool's docstring for the full schema.
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.pmax_write import draft_asset_group as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_id=campaign_id,
+        asset_group=asset_group,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
+def draft_asset_group_assets(
+    asset_group_id: str,
+    customer_id: str = "",
+    headlines: list[str] = [],
+    long_headlines: list[str] = [],
+    descriptions: list[str] = [],
+    business_name: str = "",
+    marketing_image_assets: list[str] = [],
+    square_marketing_image_assets: list[str] = [],
+    logo_assets: list[str] = [],
+    youtube_video_ids: list[str] = [],
+) -> dict:
+    """Draft attaching new assets to an existing asset group — returns PREVIEW.
+
+    Use this to add more headlines, descriptions, images, etc. to an asset
+    group that already exists. Each text/youtube asset is created inline (one
+    Asset.create + one AssetGroupAsset.create per item). Image and logo assets
+    must already exist in the account — pass their resource_names.
+
+    Char limits: headlines <=30, long_headlines <=90, descriptions <=90,
+    business_name <=25.
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.pmax_write import draft_asset_group_assets as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        asset_group_id=asset_group_id,
+        headlines=headlines,
+        long_headlines=long_headlines,
+        descriptions=descriptions,
+        business_name=business_name,
+        marketing_image_assets=marketing_image_assets,
+        square_marketing_image_assets=square_marketing_image_assets,
+        logo_assets=logo_assets,
+        youtube_video_ids=youtube_video_ids,
+    )
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def list_labels(customer_id: str = "") -> dict:
+    """List all labels in the Google Ads account.
+
+    Returns each label's id, name, status, description, and background_color.
+    Use the IDs returned here with apply_label / unapply_label / remove_entity.
+    """
+    from adloop.ads.labels import list_labels as _impl
+
+    return _impl(_config, customer_id=customer_id or _config.ads.customer_id)
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
+def draft_label(
+    name: str,
+    customer_id: str = "",
+    description: str = "",
+    background_color: str = "",
+) -> dict:
+    """Draft creating a new Label — returns PREVIEW.
+
+    name: required. Must be unique in the account.
+    description: optional human description.
+    background_color: optional hex color string like '#FF5733'.
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.labels import draft_label as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        name=name,
+        description=description,
+        background_color=background_color,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
+def apply_label(
+    entity_type: str,
+    entity_id: str,
+    label_id: str,
+    customer_id: str = "",
+) -> dict:
+    """Draft attaching a label to a campaign/ad_group/ad/keyword — returns PREVIEW.
+
+    entity_type: 'campaign', 'ad_group', 'ad', or 'keyword'.
+    entity_id: bare ID for campaign/ad_group, 'adGroupId~adId' for ad,
+        'adGroupId~criterionId' for keyword.
+    label_id: the ID of an existing Label (use list_labels to discover them).
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.labels import draft_apply_label as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        label_id=label_id,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
+def unapply_label(
+    entity_type: str,
+    entity_id: str,
+    label_id: str,
+    customer_id: str = "",
+) -> dict:
+    """Draft detaching a label from an entity (does NOT delete the Label itself).
+
+    To delete the Label resource itself, use remove_entity with
+    entity_type='label'.
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.labels import draft_unapply_label as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        label_id=label_id,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
+def draft_asset_group_signal(
+    asset_group_id: str,
+    customer_id: str = "",
+    search_theme: str = "",
+    audience_resource_name: str = "",
+) -> dict:
+    """Draft a new signal (search theme OR audience) on an asset group — returns PREVIEW.
+
+    Pass exactly one of search_theme (a phrase) or audience_resource_name
+    (a 'customers/.../audiences/...' resource name). Search themes are
+    immutable once created — to "edit", remove the old signal and add a new
+    one.
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.pmax_write import draft_asset_group_signal as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        asset_group_id=asset_group_id,
+        search_theme=search_theme,
+        audience_resource_name=audience_resource_name,
     )
 
 
@@ -1250,12 +1517,13 @@ def pause_entity(
 ) -> dict:
     """Draft pausing a campaign, ad group, ad, or keyword — returns a PREVIEW.
 
-    entity_type: "campaign", "ad_group", "ad", or "keyword"
+    entity_type: "campaign", "ad_group", "ad", "keyword", or "asset_group"
     entity_id format by type:
       - campaign: campaign ID (e.g. "12345678")
       - ad_group: ad group ID (e.g. "12345678")
       - ad: "adGroupId~adId" (e.g. "12345678~987654")
       - keyword: "adGroupId~criterionId" (e.g. "12345678~987654")
+      - asset_group: asset group ID (e.g. "6572147947")
 
     Call confirm_and_apply with the returned plan_id to execute.
     """
@@ -1278,12 +1546,13 @@ def enable_entity(
 ) -> dict:
     """Draft enabling a paused campaign, ad group, ad, or keyword — returns a PREVIEW.
 
-    entity_type: "campaign", "ad_group", "ad", or "keyword"
+    entity_type: "campaign", "ad_group", "ad", "keyword", or "asset_group"
     entity_id format by type:
       - campaign: campaign ID (e.g. "12345678")
       - ad_group: ad group ID (e.g. "12345678")
       - ad: "adGroupId~adId" (e.g. "12345678~987654")
       - keyword: "adGroupId~criterionId" (e.g. "12345678~987654")
+      - asset_group: asset group ID (e.g. "6572147947")
 
     Call confirm_and_apply with the returned plan_id to execute.
     """
@@ -1306,12 +1575,17 @@ def remove_entity(
 ) -> dict:
     """Draft REMOVING an entity — returns a PREVIEW. This is IRREVERSIBLE.
 
-    entity_type: "campaign", "ad_group", "ad", "keyword", or "negative_keyword"
+    entity_type: "campaign", "ad_group", "ad", "keyword", "negative_keyword",
+                 "asset_group", "campaign_asset", or "label"
     entity_id: The resource ID. For keywords use "adGroupId~criterionId".
                For negative_keywords use the campaign criterion ID.
+               For campaign_assets use "campaignId~assetId~fieldType".
+               For asset_groups use the asset group ID.
+               For labels use the label ID (cascades to all assignments).
 
     WARNING: Removed entities cannot be re-enabled. Use pause_entity instead
-    if you just want to temporarily disable something.
+    if you just want to temporarily disable something. To detach a label from
+    a single entity (without deleting the Label itself), use unapply_label.
 
     Call confirm_and_apply with the returned plan_id to execute.
     """
