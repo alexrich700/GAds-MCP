@@ -36,7 +36,6 @@ _LIMITS = {
     "LONG_HEADLINE": 90,
     "DESCRIPTION": 90,
     "BUSINESS_NAME": 25,
-    "CALL_TO_ACTION_SELECTION": None,
 }
 
 # Per-field-type minimums for non-retail PMax asset groups (Google's minimums).
@@ -52,7 +51,7 @@ ASSET_MINIMUMS = {
     "LOGO": 1,
 }
 
-# Per-field-type maximums (the API rejects more than this).
+# Per-field-type maximums for the inputs this module accepts.
 ASSET_MAXIMUMS = {
     "HEADLINE": 5,
     "LONG_HEADLINE": 5,
@@ -61,9 +60,6 @@ ASSET_MAXIMUMS = {
     "MARKETING_IMAGE": 20,
     "SQUARE_MARKETING_IMAGE": 20,
     "LOGO": 5,
-    "LANDSCAPE_LOGO": 5,
-    "PORTRAIT_MARKETING_IMAGE": 20,
-    "YOUTUBE_VIDEO": 5,
 }
 
 # PMax is Smart Bidding only — MANUAL_CPC / TARGET_SPEND are rejected.
@@ -556,8 +552,6 @@ def _apply_create_pmax_campaign(
     service = client.get_service("GoogleAdsService")
     campaign_service = client.get_service("CampaignService")
     budget_service = client.get_service("CampaignBudgetService")
-    asset_service = client.get_service("AssetService")
-    asset_group_service = client.get_service("AssetGroupService")
 
     operations: list = []
     asset_group_data = changes["asset_group"]
@@ -732,7 +726,11 @@ def _apply_create_asset_group_assets(
     *,
     validate_only: bool = False,
 ) -> dict:
-    """Add assets (text/video inline + image refs) to an existing asset group."""
+    """Add assets (text/video inline + image refs) to an existing asset group.
+
+    Per Google's bulk-mutate ordering rules, all Asset.create operations are
+    emitted first (consecutive), then all AssetGroupAsset.create links.
+    """
     service = client.get_service("GoogleAdsService")
     asset_service = client.get_service("AssetService")
     asset_group_service = client.get_service("AssetGroupService")
@@ -740,58 +738,52 @@ def _apply_create_asset_group_assets(
     asset_group_path = asset_group_service.asset_group_path(
         cid, changes["asset_group_id"]
     )
-    operations: list = []
+    field_type_enum = client.enums.AssetFieldTypeEnum
+
+    # Plan all the new Asset.create operations first; record the resulting
+    # temp resource_names so AssetGroupAsset.create operations can reference
+    # them after all Asset operations are emitted.
+    asset_ops: list = []
+    link_specs: list[tuple[str, str]] = []  # (asset_resource_name, field_type)
     next_temp_id = -1
 
-    text_field_type = client.enums.AssetFieldTypeEnum
-
-    # Inline text assets — Asset.create then AssetGroupAsset.create.
+    # Inline text assets.
     for ftype, texts in (changes.get("text_assets_by_type") or {}).items():
         for text in texts:
-            asset_op = client.get_type("MutateOperation")
-            asset = asset_op.asset_operation.create
+            op = client.get_type("MutateOperation")
+            asset = op.asset_operation.create
             asset.resource_name = asset_service.asset_path(cid, str(next_temp_id))
             asset.text_asset.text = text
-            operations.append(asset_op)
-
-            link_op = client.get_type("MutateOperation")
-            link = link_op.asset_group_asset_operation.create
-            link.asset = asset.resource_name
-            link.asset_group = asset_group_path
-            link.field_type = getattr(text_field_type, ftype)
-            operations.append(link_op)
-
+            asset_ops.append(op)
+            link_specs.append((asset.resource_name, ftype))
             next_temp_id -= 1
 
-    # YouTube video assets — also inline-creatable.
+    # Inline YouTube video assets.
     for video_id in changes.get("youtube_video_ids") or []:
-        asset_op = client.get_type("MutateOperation")
-        asset = asset_op.asset_operation.create
+        op = client.get_type("MutateOperation")
+        asset = op.asset_operation.create
         asset.resource_name = asset_service.asset_path(cid, str(next_temp_id))
         asset.youtube_video_asset.youtube_video_id = video_id
-        operations.append(asset_op)
-
-        link_op = client.get_type("MutateOperation")
-        link = link_op.asset_group_asset_operation.create
-        link.asset = asset.resource_name
-        link.asset_group = asset_group_path
-        link.field_type = text_field_type.YOUTUBE_VIDEO
-        operations.append(link_op)
-
+        asset_ops.append(op)
+        link_specs.append((asset.resource_name, "YOUTUBE_VIDEO"))
         next_temp_id -= 1
 
-    # Image/logo assets — pre-uploaded, link-only.
+    # Pre-uploaded image/logo assets — link-only.
     for ftype, resource_names in (changes.get("resource_assets_by_type") or {}).items():
         for rn in resource_names:
-            link_op = client.get_type("MutateOperation")
-            link = link_op.asset_group_asset_operation.create
-            link.asset = rn
-            link.asset_group = asset_group_path
-            link.field_type = getattr(text_field_type, ftype)
-            operations.append(link_op)
+            link_specs.append((rn, ftype))
 
-    if not operations:
+    if not asset_ops and not link_specs:
         return {"message": "No assets to add"}
+
+    operations: list = list(asset_ops)
+    for asset_rn, ftype in link_specs:
+        op = client.get_type("MutateOperation")
+        link = op.asset_group_asset_operation.create
+        link.asset = asset_rn
+        link.asset_group = asset_group_path
+        link.field_type = getattr(field_type_enum, ftype)
+        operations.append(op)
 
     response = service.mutate(
         customer_id=cid, mutate_operations=operations, validate_only=validate_only

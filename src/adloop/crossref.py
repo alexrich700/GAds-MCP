@@ -551,6 +551,7 @@ def analyze_pmax_performance(
         get_pmax_campaigns,
         get_pmax_channel_breakdown,
     )
+    from adloop.ads.pmax_write import ASSET_MINIMUMS
     from adloop.ga4.reports import run_ga4_report
 
     start, end = _default_date_range(date_range_start, date_range_end)
@@ -660,17 +661,14 @@ def analyze_pmax_performance(
             if ag.get("asset_group.ad_strength") in ("POOR", "AVERAGE")
         ]
 
-        # Asset minimums for non-retail PMax (Google's documented requirements):
-        # 3+ HEADLINE, 1+ LONG_HEADLINE, 2+ DESCRIPTION, 1+ BUSINESS_NAME,
-        # 1+ MARKETING_IMAGE, 1+ SQUARE_MARKETING_IMAGE, 1+ LOGO.
-        _ASSET_MINIMUMS = {
-            "HEADLINE": 3,
-            "LONG_HEADLINE": 1,
-            "DESCRIPTION": 2,
-            "BUSINESS_NAME": 1,
-            "MARKETING_IMAGE": 1,
-            "SQUARE_MARKETING_IMAGE": 1,
-            "LOGO": 1,
+        # When brand_guidelines_enabled is on, BUSINESS_NAME and LOGO assets
+        # live at the campaign level rather than the asset group, so checking
+        # the asset group for them produces false-positive "missing" warnings.
+        brand_guidelines = bool(camp.get("campaign.brand_guidelines_enabled"))
+        applicable_minimums = {
+            ftype: minimum
+            for ftype, minimum in ASSET_MINIMUMS.items()
+            if not (brand_guidelines and ftype in ("BUSINESS_NAME", "LOGO"))
         }
 
         group_summaries = []
@@ -685,7 +683,7 @@ def analyze_pmax_performance(
 
             missing_minimums = [
                 f"{ftype} (have {counts.get(ftype, 0)}, need {minimum})"
-                for ftype, minimum in _ASSET_MINIMUMS.items()
+                for ftype, minimum in applicable_minimums.items()
                 if counts.get(ftype, 0) < minimum
             ]
 

@@ -1085,6 +1085,39 @@ def draft_asset_group_assets(
     )
 
 
+@mcp.tool(annotations=_WRITE)
+@_safe
+def draft_asset_group_signal(
+    asset_group_id: str,
+    customer_id: str = "",
+    search_theme: str = "",
+    audience_resource_name: str = "",
+) -> dict:
+    """Draft a new signal (search theme OR audience) on an asset group — returns PREVIEW.
+
+    Pass exactly one of search_theme (a phrase) or audience_resource_name
+    (a 'customers/.../audiences/...' resource name). Search themes are
+    immutable once created — to "edit", remove the old signal and add a new
+    one.
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.pmax_write import draft_asset_group_signal as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        asset_group_id=asset_group_id,
+        search_theme=search_theme,
+        audience_resource_name=audience_resource_name,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Label Tools
+# ---------------------------------------------------------------------------
+
+
 @mcp.tool(annotations=_READONLY)
 @_safe
 def list_labels(customer_id: str = "") -> dict:
@@ -1176,34 +1209,6 @@ def unapply_label(
         entity_type=entity_type,
         entity_id=entity_id,
         label_id=label_id,
-    )
-
-
-@mcp.tool(annotations=_WRITE)
-@_safe
-def draft_asset_group_signal(
-    asset_group_id: str,
-    customer_id: str = "",
-    search_theme: str = "",
-    audience_resource_name: str = "",
-) -> dict:
-    """Draft a new signal (search theme OR audience) on an asset group — returns PREVIEW.
-
-    Pass exactly one of search_theme (a phrase) or audience_resource_name
-    (a 'customers/.../audiences/...' resource name). Search themes are
-    immutable once created — to "edit", remove the old signal and add a new
-    one.
-
-    Call confirm_and_apply with the returned plan_id to execute.
-    """
-    from adloop.ads.pmax_write import draft_asset_group_signal as _impl
-
-    return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
-        asset_group_id=asset_group_id,
-        search_theme=search_theme,
-        audience_resource_name=audience_resource_name,
     )
 
 

@@ -108,7 +108,9 @@ class TestDraftPmaxCampaign:
 
         assert "error" in result
         details = " ".join(result["details"])
-        assert "MANUAL_CPC" not in details or "PMax" in details
+        # The validator names the actual rejected value and points at the
+        # allowed Smart Bidding strategies.
+        assert "MANUAL_CPC" in details
         assert "MAXIMIZE_CONVERSIONS" in details
 
     def test_rejects_target_spend(self, config):
