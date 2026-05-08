@@ -194,7 +194,11 @@ def _apply_create_label(
         label.text_label.background_color = changes["background_color"]
 
     response = service.mutate_labels(
-        customer_id=cid, operations=[operation], validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "operations": [operation],
+            "validate_only": validate_only,
+        }
     )
     if validate_only:
         return {"status": "validated"}
@@ -223,7 +227,11 @@ def _apply_apply_label(
         )
         link.label = label_resource
         response = service.mutate_campaign_labels(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "ad_group":
@@ -235,7 +243,11 @@ def _apply_apply_label(
         )
         link.label = label_resource
         response = service.mutate_ad_group_labels(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "ad":
@@ -248,7 +260,11 @@ def _apply_apply_label(
         link.ad_group_ad = f"customers/{cid}/adGroupAds/{resolved_id}"
         link.label = label_resource
         response = service.mutate_ad_group_ad_labels(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "keyword":
@@ -258,7 +274,11 @@ def _apply_apply_label(
         link.ad_group_criterion = f"customers/{cid}/adGroupCriteria/{entity_id}"
         link.label = label_resource
         response = service.mutate_ad_group_criterion_labels(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     else:
@@ -289,7 +309,11 @@ def _apply_unapply_label(
         operation = client.get_type("CampaignLabelOperation")
         operation.remove = f"customers/{cid}/campaignLabels/{entity_id}~{label_id}"
         response = service.mutate_campaign_labels(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "ad_group":
@@ -297,7 +321,11 @@ def _apply_unapply_label(
         operation = client.get_type("AdGroupLabelOperation")
         operation.remove = f"customers/{cid}/adGroupLabels/{entity_id}~{label_id}"
         response = service.mutate_ad_group_labels(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "ad":
@@ -310,7 +338,11 @@ def _apply_unapply_label(
             f"customers/{cid}/adGroupAdLabels/{resolved_id}~{label_id}"
         )
         response = service.mutate_ad_group_ad_labels(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "keyword":
@@ -320,7 +352,11 @@ def _apply_unapply_label(
             f"customers/{cid}/adGroupCriterionLabels/{entity_id}~{label_id}"
         )
         response = service.mutate_ad_group_criterion_labels(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     else:
@@ -346,7 +382,11 @@ def _apply_remove_label(
     operation = client.get_type("LabelOperation")
     operation.remove = f"customers/{cid}/labels/{entity_id}"
     response = service.mutate_labels(
-        customer_id=cid, operations=[operation], validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "operations": [operation],
+            "validate_only": validate_only,
+        }
     )
     if validate_only:
         return {"status": "validated"}
