@@ -486,11 +486,16 @@ def draft_campaign(
     language_ids: list[str] | None = None,
     final_url_suffix: str | None = None,
 ) -> dict:
-    """Draft a full campaign structure — returns preview, does NOT execute.
+    """Draft a full Search campaign structure — returns preview, does NOT execute.
 
     Creates: CampaignBudget + Campaign (PAUSED) + AdGroup + optional Keywords
     + geo targeting + language targeting.
     Ads are NOT included — use draft_responsive_search_ad separately.
+
+    For Performance Max campaigns, use ``draft_pmax_campaign`` instead — the
+    PMax structure (no ad groups, asset_groups + assets + signals must be
+    created in the same mutate as the campaign) is incompatible with this
+    Search-shaped draft.
 
     geo_target_ids: list of geo target constant IDs (e.g. ["2276"] for Germany,
         ["2840"] for USA). REQUIRED — campaigns must target specific countries.
@@ -505,6 +510,16 @@ def draft_campaign(
         check_budget_cap,
     )
     from adloop.safety.preview import ChangePlan, store_plan
+
+    if channel_type.upper() == "PERFORMANCE_MAX":
+        return {
+            "error": (
+                "draft_campaign cannot create Performance Max campaigns. PMax "
+                "campaigns have no ad groups, no keywords, and require an "
+                "asset_group with assets + signals to be created in the same "
+                "API call. Use draft_pmax_campaign instead."
+            ),
+        }
 
     try:
         check_blocked_operation("create_campaign", config.safety)
@@ -870,6 +885,38 @@ def confirm_and_apply(
         dry_run = True
 
     if dry_run:
+        # Send the operations to the Google Ads API with validate_only=True.
+        # The API runs full validation (field types, enum values, references,
+        # PMax-network-settings rules, budget caps, etc.) and commits nothing.
+        # If validation fails, the API returns the same error shape it would
+        # return on a real apply — no false DRY_RUN_SUCCESS for a malformed
+        # mutate.
+        try:
+            validation = _execute_plan(config, plan, validate_only=True)
+        except Exception as e:
+            log_mutation(
+                config.safety.log_file,
+                operation=plan.operation,
+                customer_id=plan.customer_id,
+                entity_type=plan.entity_type,
+                entity_id=plan.entity_id,
+                changes=plan.changes,
+                dry_run=True,
+                result="dry_run_validation_failed",
+                error=str(e),
+            )
+            return {
+                "status": "DRY_RUN_VALIDATION_FAILED",
+                "plan_id": plan.plan_id,
+                "operation": plan.operation,
+                "error": str(e),
+                "message": (
+                    "Google Ads rejected the plan during validate_only — "
+                    "applying with dry_run=false would fail with the same error. "
+                    "Fix the plan inputs and re-draft."
+                ),
+            }
+
         log_mutation(
             config.safety.log_file,
             operation=plan.operation,
@@ -885,9 +932,11 @@ def confirm_and_apply(
             "plan_id": plan.plan_id,
             "operation": plan.operation,
             "changes": plan.changes,
+            "validate_only": validation,
             "message": (
-                "Dry run completed — no changes were made to your Google Ads account. "
-                "To apply for real, call confirm_and_apply again with dry_run=false."
+                "Google Ads validated the plan with validate_only=True and "
+                "accepted it. No changes were made. To apply for real, call "
+                "confirm_and_apply again with dry_run=false."
             ),
         }
 
@@ -932,8 +981,12 @@ def confirm_and_apply(
 # ---------------------------------------------------------------------------
 
 _VALID_MATCH_TYPES = {"EXACT", "PHRASE", "BROAD"}
-_VALID_ENTITY_TYPES = {"campaign", "ad_group", "ad", "keyword"}
-_REMOVABLE_ENTITY_TYPES = _VALID_ENTITY_TYPES | {"negative_keyword", "campaign_asset"}
+_VALID_ENTITY_TYPES = {"campaign", "ad_group", "ad", "keyword", "asset_group"}
+_REMOVABLE_ENTITY_TYPES = _VALID_ENTITY_TYPES | {
+    "negative_keyword",
+    "campaign_asset",
+    "label",
+}
 
 _DEFAULT_FINAL_URL_SUFFIX = (
     "utm_source=google&utm_medium=cpc"
@@ -1069,7 +1122,7 @@ _VALID_BIDDING_STRATEGIES = {
     "MANUAL_CPC",
 }
 
-_VALID_CHANNEL_TYPES = {"SEARCH", "DISPLAY", "SHOPPING", "VIDEO", "PERFORMANCE_MAX"}
+_VALID_CHANNEL_TYPES = {"SEARCH", "DISPLAY", "SHOPPING", "VIDEO"}
 
 
 def _validate_campaign(
@@ -1348,9 +1401,21 @@ def _draft_status_change(
 # ---------------------------------------------------------------------------
 
 
-def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
-    """Dispatch to the right Google Ads mutate call based on plan.operation."""
+def _execute_plan(
+    config: AdLoopConfig,
+    plan: object,
+    *,
+    validate_only: bool = False,
+) -> dict:
+    """Dispatch to the right Google Ads mutate call based on plan.operation.
+
+    When validate_only=True, every helper passes the flag through to the
+    underlying Google Ads service mutate, which runs full validation server-
+    side and returns errors as if it were a real apply, but commits nothing.
+    """
     from adloop.ads.client import get_ads_client, normalize_customer_id
+    from adloop.ads.labels import LABEL_OPERATIONS
+    from adloop.ads.pmax_write import PMAX_OPERATIONS
 
     client = get_ads_client(config)
     cid = normalize_customer_id(plan.customer_id)
@@ -1367,6 +1432,8 @@ def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
         "enable_entity": _apply_status_change,
         "remove_entity": _apply_remove,
         "create_sitelinks": _apply_create_sitelinks,
+        **PMAX_OPERATIONS,
+        **LABEL_OPERATIONS,
     }
 
     handler = dispatch.get(plan.operation)
@@ -1380,15 +1447,28 @@ def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
             plan.entity_type,
             plan.entity_id,
             plan.changes["target_status"],
+            validate_only=validate_only,
         )
 
     if plan.operation == "remove_entity":
-        return handler(client, cid, plan.entity_type, plan.entity_id)
+        return handler(
+            client,
+            cid,
+            plan.entity_type,
+            plan.entity_id,
+            validate_only=validate_only,
+        )
 
-    return handler(client, cid, plan.changes)
+    return handler(client, cid, plan.changes, validate_only=validate_only)
 
 
-def _apply_create_campaign(client: object, cid: str, changes: dict) -> dict:
+def _apply_create_campaign(
+    client: object,
+    cid: str,
+    changes: dict,
+    *,
+    validate_only: bool = False,
+) -> dict:
     """Create campaign + budget + ad group + optional keywords atomically."""
     service = client.get_service("GoogleAdsService")
     campaign_service = client.get_service("CampaignService")
@@ -1503,7 +1583,12 @@ def _apply_create_campaign(client: object, cid: str, changes: dict) -> dict:
         )
         operations.append(lang_op)
 
-    response = service.mutate(customer_id=cid, mutate_operations=operations)
+    response = service.mutate(
+        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+    )
+
+    if validate_only:
+        return {"status": "validated", "operation_count": len(operations)}
 
     results = {}
     num_keywords = len(kw_list)
@@ -1530,7 +1615,13 @@ def _apply_create_campaign(client: object, cid: str, changes: dict) -> dict:
     return results
 
 
-def _apply_create_ad_group(client: object, cid: str, changes: dict) -> dict:
+def _apply_create_ad_group(
+    client: object,
+    cid: str,
+    changes: dict,
+    *,
+    validate_only: bool = False,
+) -> dict:
     """Create ad group + optional keywords in an existing campaign atomically."""
     service = client.get_service("GoogleAdsService")
     campaign_service = client.get_service("CampaignService")
@@ -1562,7 +1653,12 @@ def _apply_create_ad_group(client: object, cid: str, changes: dict) -> dict:
         )
         operations.append(kw_op)
 
-    response = service.mutate(customer_id=cid, mutate_operations=operations)
+    response = service.mutate(
+        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+    )
+
+    if validate_only:
+        return {"status": "validated", "operation_count": len(operations)}
 
     results: dict = {}
     for i, resp in enumerate(response.mutate_operation_responses):
@@ -1578,7 +1674,13 @@ def _apply_create_ad_group(client: object, cid: str, changes: dict) -> dict:
     return results
 
 
-def _apply_update_campaign(client: object, cid: str, changes: dict) -> dict:
+def _apply_update_campaign(
+    client: object,
+    cid: str,
+    changes: dict,
+    *,
+    validate_only: bool = False,
+) -> dict:
     """Update an existing campaign's settings."""
     from google.protobuf import field_mask_pb2
 
@@ -1719,7 +1821,12 @@ def _apply_update_campaign(client: object, cid: str, changes: dict) -> dict:
     if not operations:
         return {"message": "No changes to apply"}
 
-    response = service.mutate(customer_id=cid, mutate_operations=operations)
+    response = service.mutate(
+        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+    )
+
+    if validate_only:
+        return {"status": "validated", "operation_count": len(operations)}
 
     results = {"updated": []}
     for resp in response.mutate_operation_responses:
@@ -1733,7 +1840,13 @@ def _apply_update_campaign(client: object, cid: str, changes: dict) -> dict:
     return results
 
 
-def _apply_create_rsa(client: object, cid: str, changes: dict) -> dict:
+def _apply_create_rsa(
+    client: object,
+    cid: str,
+    changes: dict,
+    *,
+    validate_only: bool = False,
+) -> dict:
     service = client.get_service("AdGroupAdService")
     operation = client.get_type("AdGroupAdOperation")
     ad_group_ad = operation.create
@@ -1777,12 +1890,20 @@ def _apply_create_rsa(client: object, cid: str, changes: dict) -> dict:
         ad.responsive_search_ad.path2 = changes["path2"]
 
     response = service.mutate_ad_group_ads(
-        customer_id=cid, operations=[operation]
+        customer_id=cid, operations=[operation], validate_only=validate_only
     )
+    if validate_only:
+        return {"status": "validated"}
     return {"resource_name": response.results[0].resource_name}
 
 
-def _apply_replace_rsa(client: object, cid: str, changes: dict) -> dict:
+def _apply_replace_rsa(
+    client: object,
+    cid: str,
+    changes: dict,
+    *,
+    validate_only: bool = False,
+) -> dict:
     """Create a new RSA and pause/remove the old one."""
     # Step 1: Create the replacement ad
     create_changes = {
@@ -1793,17 +1914,22 @@ def _apply_replace_rsa(client: object, cid: str, changes: dict) -> dict:
         "path1": changes.get("path1", ""),
         "path2": changes.get("path2", ""),
     }
-    new_ad_result = _apply_create_rsa(client, cid, create_changes)
+    new_ad_result = _apply_create_rsa(
+        client, cid, create_changes, validate_only=validate_only
+    )
 
     # Step 2: Pause or remove the old ad
     old_ad_id = changes["old_ad_id"]
     try:
         if changes.get("remove_old"):
-            old_ad_result = _apply_remove(client, cid, "ad", old_ad_id)
+            old_ad_result = _apply_remove(
+                client, cid, "ad", old_ad_id, validate_only=validate_only
+            )
             old_action = "REMOVED"
         else:
             old_ad_result = _apply_status_change(
-                client, cid, "ad", old_ad_id, "PAUSED"
+                client, cid, "ad", old_ad_id, "PAUSED",
+                validate_only=validate_only,
             )
             old_action = "PAUSED"
     except Exception as exc:
@@ -1832,7 +1958,13 @@ def _apply_replace_rsa(client: object, cid: str, changes: dict) -> dict:
     }
 
 
-def _apply_add_keywords(client: object, cid: str, changes: dict) -> dict:
+def _apply_add_keywords(
+    client: object,
+    cid: str,
+    changes: dict,
+    *,
+    validate_only: bool = False,
+) -> dict:
     service = client.get_service("AdGroupCriterionService")
     ad_group_path = client.get_service("AdGroupService").ad_group_path(
         cid, changes["ad_group_id"]
@@ -1850,12 +1982,20 @@ def _apply_add_keywords(client: object, cid: str, changes: dict) -> dict:
         operations.append(operation)
 
     response = service.mutate_ad_group_criteria(
-        customer_id=cid, operations=operations
+        customer_id=cid, operations=operations, validate_only=validate_only
     )
+    if validate_only:
+        return {"status": "validated", "operation_count": len(operations)}
     return {"resource_names": [r.resource_name for r in response.results]}
 
 
-def _apply_add_negative_keywords(client: object, cid: str, changes: dict) -> dict:
+def _apply_add_negative_keywords(
+    client: object,
+    cid: str,
+    changes: dict,
+    *,
+    validate_only: bool = False,
+) -> dict:
     service = client.get_service("CampaignCriterionService")
     campaign_path = client.get_service("CampaignService").campaign_path(
         cid, changes["campaign_id"]
@@ -1874,8 +2014,10 @@ def _apply_add_negative_keywords(client: object, cid: str, changes: dict) -> dic
         operations.append(operation)
 
     response = service.mutate_campaign_criteria(
-        customer_id=cid, operations=operations
+        customer_id=cid, operations=operations, validate_only=validate_only
     )
+    if validate_only:
+        return {"status": "validated", "operation_count": len(operations)}
     return {"resource_names": [r.resource_name for r in response.results]}
 
 
@@ -1910,6 +2052,8 @@ def _apply_remove(
     cid: str,
     entity_type: str,
     entity_id: str,
+    *,
+    validate_only: bool = False,
 ) -> dict:
     """Remove an entity via the REMOVE mutate operation (irreversible)."""
     if entity_type == "campaign":
@@ -1917,7 +2061,7 @@ def _apply_remove(
         operation = client.get_type("CampaignOperation")
         operation.remove = service.campaign_path(cid, entity_id)
         response = service.mutate_campaigns(
-            customer_id=cid, operations=[operation]
+            customer_id=cid, operations=[operation], validate_only=validate_only
         )
 
     elif entity_type == "ad_group":
@@ -1925,7 +2069,7 @@ def _apply_remove(
         operation = client.get_type("AdGroupOperation")
         operation.remove = service.ad_group_path(cid, entity_id)
         response = service.mutate_ad_groups(
-            customer_id=cid, operations=[operation]
+            customer_id=cid, operations=[operation], validate_only=validate_only
         )
 
     elif entity_type == "ad":
@@ -1934,7 +2078,7 @@ def _apply_remove(
         operation = client.get_type("AdGroupAdOperation")
         operation.remove = f"customers/{cid}/adGroupAds/{resolved_id}"
         response = service.mutate_ad_group_ads(
-            customer_id=cid, operations=[operation]
+            customer_id=cid, operations=[operation], validate_only=validate_only
         )
 
     elif entity_type == "keyword":
@@ -1942,7 +2086,7 @@ def _apply_remove(
         operation = client.get_type("AdGroupCriterionOperation")
         operation.remove = f"customers/{cid}/adGroupCriteria/{entity_id}"
         response = service.mutate_ad_group_criteria(
-            customer_id=cid, operations=[operation]
+            customer_id=cid, operations=[operation], validate_only=validate_only
         )
 
     elif entity_type == "negative_keyword":
@@ -1950,7 +2094,22 @@ def _apply_remove(
         operation = client.get_type("CampaignCriterionOperation")
         operation.remove = f"customers/{cid}/campaignCriteria/{entity_id}"
         response = service.mutate_campaign_criteria(
-            customer_id=cid, operations=[operation]
+            customer_id=cid, operations=[operation], validate_only=validate_only
+        )
+
+    elif entity_type == "asset_group":
+        service = client.get_service("AssetGroupService")
+        operation = client.get_type("AssetGroupOperation")
+        operation.remove = service.asset_group_path(cid, entity_id)
+        response = service.mutate_asset_groups(
+            customer_id=cid, operations=[operation], validate_only=validate_only
+        )
+
+    elif entity_type == "label":
+        from adloop.ads.labels import _apply_remove_label
+
+        return _apply_remove_label(
+            client, cid, entity_id, validate_only=validate_only
         )
 
     elif entity_type == "campaign_asset":
@@ -1969,8 +2128,10 @@ def _apply_remove(
         op = client.get_type("MutateOperation")
         op.campaign_asset_operation.remove = resource_name
         response = ga_service.mutate(
-            customer_id=cid, mutate_operations=[op]
+            customer_id=cid, mutate_operations=[op], validate_only=validate_only
         )
+        if validate_only:
+            return {"status": "validated"}
         resp_inner = response.mutate_operation_responses[0]
         if resp_inner.campaign_asset_result.resource_name:
             return {"resource_name": resp_inner.campaign_asset_result.resource_name}
@@ -1979,6 +2140,8 @@ def _apply_remove(
     else:
         raise ValueError(f"Cannot remove entity_type: {entity_type}")
 
+    if validate_only:
+        return {"status": "validated"}
     return {"resource_name": response.results[0].resource_name}
 
 
@@ -1988,8 +2151,10 @@ def _apply_status_change(
     entity_type: str,
     entity_id: str,
     status: str,
+    *,
+    validate_only: bool = False,
 ) -> dict:
-    """Update the status of a campaign, ad group, ad, or keyword."""
+    """Update the status of a campaign, ad group, ad, asset group, or keyword."""
     if entity_type == "campaign":
         service = client.get_service("CampaignService")
         operation = client.get_type("CampaignOperation")
@@ -2025,6 +2190,14 @@ def _apply_status_change(
         )
         mutate = service.mutate_ad_group_criteria
 
+    elif entity_type == "asset_group":
+        service = client.get_service("AssetGroupService")
+        operation = client.get_type("AssetGroupOperation")
+        entity = operation.update
+        entity.resource_name = service.asset_group_path(cid, entity_id)
+        entity.status = getattr(client.enums.AssetGroupStatusEnum, status)
+        mutate = service.mutate_asset_groups
+
     else:
         raise ValueError(f"Unknown entity_type: {entity_type}")
 
@@ -2033,11 +2206,21 @@ def _apply_status_change(
 
     operation.update_mask = field_mask_pb2.FieldMask(paths=["status"])
 
-    response = mutate(customer_id=cid, operations=[operation])
+    response = mutate(
+        customer_id=cid, operations=[operation], validate_only=validate_only
+    )
+    if validate_only:
+        return {"status": "validated"}
     return {"resource_name": response.results[0].resource_name}
 
 
-def _apply_create_sitelinks(client: object, cid: str, changes: dict) -> dict:
+def _apply_create_sitelinks(
+    client: object,
+    cid: str,
+    changes: dict,
+    *,
+    validate_only: bool = False,
+) -> dict:
     """Create sitelink assets and link them to a campaign."""
     asset_service = client.get_service("AssetService")
     campaign_asset_service = client.get_service("CampaignAssetService")
@@ -2070,8 +2253,11 @@ def _apply_create_sitelinks(client: object, cid: str, changes: dict) -> dict:
         operations.append(op)
 
     response = googleads_service.mutate(
-        customer_id=cid, mutate_operations=operations
+        customer_id=cid, mutate_operations=operations, validate_only=validate_only
     )
+
+    if validate_only:
+        return {"status": "validated", "operation_count": len(operations)}
 
     results = {"assets": [], "campaign_assets": []}
     num_sitelinks = len(sitelinks)

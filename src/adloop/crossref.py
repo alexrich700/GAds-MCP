@@ -534,12 +534,12 @@ def analyze_pmax_performance(
 
     Aggregates everything you can see about a PMax campaign in one place so the
     AI can reason about it as a whole. Pulls campaign metrics, asset group ad
-    strength, individual asset performance labels, channel breakdown, and (when
-    a property is configured) GA4 paid sessions/conversions.
+    strength, asset counts and missing-minimum diagnostics, channel breakdown,
+    and (when a property is configured) GA4 paid sessions/conversions.
 
     Returns auto-generated insights[] flagging:
     - Asset groups with POOR or AVERAGE ad strength
-    - Assets labeled LOW that should be replaced
+    - Asset groups below the documented PMax asset-type minimums
     - Channel skew (e.g. 90%+ of spend going to a single surface)
     - Zero-conversion campaigns despite spend
     - GDPR consent gaps (click-to-session ratio > 2:1)
@@ -551,6 +551,7 @@ def analyze_pmax_performance(
         get_pmax_campaigns,
         get_pmax_channel_breakdown,
     )
+    from adloop.ads.pmax_write import ASSET_MINIMUMS
     from adloop.ga4.reports import run_ga4_report
 
     start, end = _default_date_range(date_range_start, date_range_end)
@@ -660,30 +661,38 @@ def analyze_pmax_performance(
             if ag.get("asset_group.ad_strength") in ("POOR", "AVERAGE")
         ]
 
+        # When brand_guidelines_enabled is on, BUSINESS_NAME and LOGO assets
+        # live at the campaign level rather than the asset group, so checking
+        # the asset group for them produces false-positive "missing" warnings.
+        brand_guidelines = bool(camp.get("campaign.brand_guidelines_enabled"))
+        applicable_minimums = {
+            ftype: minimum
+            for ftype, minimum in ASSET_MINIMUMS.items()
+            if not (brand_guidelines and ftype in ("BUSINESS_NAME", "LOGO"))
+        }
+
         group_summaries = []
         for ag in cmp_groups:
             ag_id = str(ag.get("asset_group.id", ""))
             ag_assets = assets_by_group.get(ag_id, [])
 
             counts: dict[str, int] = {}
-            low_assets: list[dict] = []
             for a in ag_assets:
                 ftype = a.get("asset_group_asset.field_type", "UNKNOWN")
                 counts[ftype] = counts.get(ftype, 0) + 1
-                if a.get("asset_group_asset.performance_label") == "LOW":
-                    low_assets.append({
-                        "asset_id": str(a.get("asset.id", "")),
-                        "field_type": ftype,
-                        "text": a.get("asset.text_asset.text"),
-                        "image_url": a.get("asset.image_asset.full_size.url"),
-                    })
+
+            missing_minimums = [
+                f"{ftype} (have {counts.get(ftype, 0)}, need {minimum})"
+                for ftype, minimum in applicable_minimums.items()
+                if counts.get(ftype, 0) < minimum
+            ]
 
             group_summaries.append({
                 "asset_group_id": ag_id,
                 "asset_group_name": ag.get("asset_group.name", ""),
                 "ad_strength": ag.get("asset_group.ad_strength", ""),
                 "asset_counts_by_type": counts,
-                "low_performing_assets": low_assets,
+                "missing_asset_minimums": missing_minimums,
                 "metrics": {
                     "cost": _safe_float(ag.get("metrics.cost", 0)),
                     "clicks": _safe_int(ag.get("metrics.clicks", 0)),
@@ -691,11 +700,11 @@ def analyze_pmax_performance(
                 },
             })
 
-            if low_assets:
+            if missing_minimums:
                 insights.append(
                     f"{cmp_name} / {ag.get('asset_group.name', '')}: "
-                    f"{len(low_assets)} LOW-performing asset(s) — "
-                    f"review the low_performing_assets list and replace these in Google Ads"
+                    f"asset group is below minimums for {', '.join(missing_minimums)} "
+                    f"— add the missing assets via draft_asset_group_assets"
                 )
 
             if ag.get("asset_group.ad_strength") in ("POOR", "AVERAGE"):
@@ -748,7 +757,6 @@ def analyze_pmax_performance(
             "campaign_name": cmp_name,
             "campaign_status": camp.get("campaign.status", ""),
             "bidding_strategy_type": camp.get("campaign.bidding_strategy_type", ""),
-            "url_expansion_opt_out": camp.get("campaign.url_expansion_opt_out"),
             "brand_guidelines_enabled": camp.get("campaign.brand_guidelines_enabled"),
             "daily_budget": camp.get("campaign_budget.amount"),
             "metrics": {

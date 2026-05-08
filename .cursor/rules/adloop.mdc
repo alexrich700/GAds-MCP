@@ -57,20 +57,21 @@ Performance Max (PMax) campaigns have a different structure than Search:
 
 | Tool | When to Use | Key Parameters |
 |------|-------------|----------------|
-| `get_pmax_campaigns` | Discover PMax campaigns and their PMax-specific settings (URL expansion, brand guidelines) | `date_range_start`, `date_range_end` |
+| `get_pmax_campaigns` | Discover PMax campaigns and their PMax-specific settings (brand guidelines) | `date_range_start`, `date_range_end` |
 | `get_pmax_channel_breakdown` | "Where is my PMax spend going?" — Search vs YouTube vs Display etc. | `date_range_start`, `date_range_end`, `campaign_id` (optional) |
 | `get_asset_groups` | List asset groups in a PMax campaign with ad strength + metrics | `campaign_id` (optional), `date_range_start`, `date_range_end` |
-| `get_asset_group_assets` | Inspect every asset's `field_type`, `performance_label` (LOW/GOOD/BEST/PENDING), and content | `asset_group_id` OR `campaign_id` |
+| `get_asset_group_assets` | Inspect every asset's `field_type`, status, and policy `review_status` | `asset_group_id` OR `campaign_id` |
 | `get_asset_group_signals` | List search themes and audience signals attached to an asset group | `asset_group_id` OR `campaign_id` |
-| `get_asset_group_top_combinations` | See which headline+description+image combos Google assembled and how often they served | `asset_group_id` OR `campaign_id`, `date_range_start`, `date_range_end` |
+| `get_asset_group_top_combinations` | See which headline+description+image combos Google assembled (no metrics in v24) | `asset_group_id` OR `campaign_id`, `date_range_start`, `date_range_end` |
 | `get_pmax_search_terms` | Get aggregated category-level insights (not individual queries) for a PMax campaign | `campaign_id` (REQUIRED), `date_range_start`, `date_range_end` |
 
 **PMax read tool notes:**
 - `get_pmax_campaigns` returns `metrics.cost`, `metrics.cpa`, `metrics.roas`, and `campaign_budget.amount` pre-computed. The Search-style `bidding_strategy_type` is shown — for PMax it's typically `MAXIMIZE_CONVERSIONS` or `MAXIMIZE_CONVERSION_VALUE` (Smart Bidding only).
 - `get_pmax_channel_breakdown` is only reliable from **2025-06-01 onwards**. Earlier rows return `MIXED` for `segments.ad_network_type` because Google could not attribute. The tool emits a warning in `insights[]` when the date range overlaps that period.
-- `get_asset_group_assets` returns `asset_group_asset.performance_label` — values are `LOW`, `GOOD`, `BEST`, `PENDING`. `PENDING` means Google hasn't gathered enough data yet (typically the first 1-2 weeks). `LOW` assets are clear replacement candidates.
+- `get_asset_group_assets` no longer returns the `performance_label` (LOW/GOOD/BEST/PENDING) field — Google removed it from `asset_group_asset` in API v24. To judge per-asset performance now, look at `asset_group_top_combinations` (which assets actually serve together) or query `asset_field_type_view` for per-field-type metrics.
 - `get_asset_group_signals` returns `signal_type = SEARCH_THEME | AUDIENCE | UNKNOWN`. Search themes are immutable once created — to "edit", you remove and re-create.
-- `get_pmax_search_terms` requires API v23.2+. Returns category labels only — Google deliberately does NOT expose individual search queries for PMax campaigns. Don't tell users they can see exactly what someone typed.
+- `get_asset_group_top_combinations` does NOT return any `metrics.*` fields in v24 — the API rejects them with PROHIBITED_METRIC_IN_SELECT_OR_WHERE_CLAUSE. Combinations come pre-ordered by Google by serving frequency.
+- `get_pmax_search_terms` requires API v23.2+. Returns `metrics.impressions` and `metrics.clicks` only — `metrics.cost_micros`, `metrics.conversions`, `metrics.conversions_value` are not selectable on `campaign_search_term_insight`. Google deliberately does NOT expose individual search queries for PMax campaigns. Don't tell users they can see exactly what someone typed, or that this tool surfaces per-category cost.
 
 ### Cross-Reference Tools (GA4 + Ads combined)
 
@@ -79,13 +80,13 @@ Performance Max (PMax) campaigns have a different structure than Search:
 | `analyze_campaign_conversions` | "What's my real CPA?", paid vs organic comparison, GDPR gap analysis | `date_range_start`, `date_range_end`, `campaign_name` (optional filter) |
 | `landing_page_analysis` | "Which landing pages convert?", identify pages with traffic but no conversions | `date_range_start`, `date_range_end` |
 | `attribution_check` | "Are my conversions tracked correctly?", Ads vs GA4 conversion discrepancies | `date_range_start`, `date_range_end`, `conversion_events` (optional GA4 event names) |
-| `analyze_pmax_performance` | One-call PMax diagnostic — campaign + asset groups + asset performance labels + channel mix + GA4 | `date_range_start`, `date_range_end`, `campaign_id` (optional filter) |
+| `analyze_pmax_performance` | One-call PMax diagnostic — campaign + asset groups + asset counts + channel mix + GA4 | `date_range_start`, `date_range_end`, `campaign_id` (optional filter) |
 
 These tools call both APIs internally and return unified results with computed `insights[]`. They are read-only — no mutations. Each returns a `date_range` and auto-generates conditional warnings (GDPR gaps, zero conversions, attribution mismatches, orphaned URLs).
 
 **`analyze_campaign_conversions` details:** Returns one row per campaign (with `campaign_id`) including `conversion_discrepancy_pct` between Ads and GA4. When `campaign_name` is omitted, all campaigns are returned — no need to call once per campaign.
 
-**`analyze_pmax_performance` details:** Aggregates everything you can see about Performance Max in one call: campaign metrics + bidding/URL-expansion/brand-guidelines settings, every asset group with its `ad_strength`, individual asset `performance_label`s, the channel-mix breakdown, and (when a GA4 property is configured) GA4 paid sessions/conversions per campaign. The `insights[]` flag POOR/AVERAGE asset groups, LOW-labeled assets, channel-spend skew (>90% on a single surface), zero-conversion campaigns, GDPR consent gaps, and pre-2025-06-01 data caveats. Use this as the FIRST call when the user asks about PMax performance — it eliminates 4-5 separate read tool calls.
+**`analyze_pmax_performance` details:** Aggregates everything you can see about Performance Max in one call: campaign metrics + bidding/brand-guidelines settings, every asset group with its `ad_strength` and asset counts, the channel-mix breakdown, and (when a GA4 property is configured) GA4 paid sessions/conversions per campaign. The `insights[]` flag POOR/AVERAGE asset groups, asset groups missing the documented PMax minimums (3+ HEADLINE, 1+ LONG_HEADLINE, 2+ DESCRIPTION, 1+ BUSINESS_NAME, 1+ MARKETING_IMAGE, 1+ SQUARE_MARKETING_IMAGE, 1+ LOGO), channel-spend skew (>90% on a single surface), zero-conversion campaigns, GDPR consent gaps, and pre-2025-06-01 data caveats. Use this as the FIRST call when the user asks about PMax performance — it eliminates 4-5 separate read tool calls.
 
 ### Tracking Tools
 
@@ -110,18 +111,26 @@ These tools call both APIs internally and return unified results with computed `
 
 | Tool | What It Does | Validation |
 |------|-------------|------------|
-| `draft_campaign` | Create full campaign structure (budget + campaign + ad group + keywords + geo/language targeting). Auto-sets Final URL Suffix with UTM tracking for SEARCH campaigns. | `campaign_name`, `daily_budget`, `bidding_strategy`, `geo_target_ids` (REQUIRED), `language_ids` (REQUIRED), keywords validated, `final_url_suffix` (auto-set for SEARCH, pass "" to disable) |
-| `draft_ad_group` | Create a new ad group within an existing campaign (does NOT publish) | `campaign_id` (REQUIRED), `ad_group_name` (REQUIRED), `keywords` (optional list of {text, match_type}), `cpc_bid_micros` (optional) |
+| `draft_campaign` | Create a SEARCH campaign (budget + campaign + ad group + keywords + geo/language targeting). Auto-sets Final URL Suffix with UTM tracking. **Rejects channel_type=PERFORMANCE_MAX** — use `draft_pmax_campaign` instead. | `campaign_name`, `daily_budget`, `bidding_strategy`, `geo_target_ids` (REQUIRED), `language_ids` (REQUIRED), keywords validated, `final_url_suffix` (auto-set for SEARCH, pass "" to disable) |
+| `draft_pmax_campaign` | Create a Performance Max campaign with its first asset group + assets + signals atomically. PMax has no ad groups, no keywords, no `network_settings`. | `campaign_name`, `daily_budget`, `bidding_strategy` (Smart Bidding only), `geo_target_ids`, `language_ids`, `asset_group` dict (see PMax Write Tools section) |
+| `draft_asset_group` | Add a new asset group (with assets + signals) to an existing PMax campaign | `campaign_id` (REQUIRED), `asset_group` dict |
+| `draft_asset_group_assets` | Add headlines / long_headlines / descriptions / business_name / image refs / YouTube videos to an existing asset group | `asset_group_id` (REQUIRED), plus any of the asset arrays |
+| `draft_asset_group_signal` | Add a single signal (search theme OR audience) to an asset group | `asset_group_id` (REQUIRED), plus exactly one of `search_theme` / `audience_resource_name` |
+| `draft_ad_group` | Create a new ad group within an existing SEARCH campaign (does NOT publish) | `campaign_id` (REQUIRED), `ad_group_name` (REQUIRED), `keywords` (optional list of {text, match_type}), `cpc_bid_micros` (optional) |
 | `update_campaign` | Modify existing campaign settings — bid strategy, budget, geo targets, language targets, Final URL suffix | `campaign_id` (REQUIRED), plus any of: `bidding_strategy`, `daily_budget`, `geo_target_ids`, `language_ids`, `final_url_suffix` |
 | `draft_responsive_search_ad` | Create RSA preview (does NOT publish) | 3-15 headlines (≤30 chars), 2-4 descriptions (≤90 chars), final_url required, path1/path2 (≤15 chars each). Headlines/descriptions support optional **pinning**: pass `{"text": "...", "pinned_to": "HEADLINE_1"}` instead of a plain string. Valid pins: HEADLINE_1/2/3 for headlines, DESCRIPTION_1/2 for descriptions. Plain strings are unpinned. |
 | `draft_rsa_replacement` | **Fix** an existing RSA — creates corrected replacement and removes the old ad. Use for copy errors, not A/B testing. For testing variants, use `draft_responsive_search_ad` instead. | `ad_id` (REQUIRED), 3-15 headlines (≤30 chars), 2-4 descriptions (≤90 chars), `final_url` (inherits from old ad if blank), path1/path2 (≤15 chars each), `remove_old` (default true). Supports **pinning** — same format as `draft_responsive_search_ad`. |
 | `draft_sitelinks` | Create sitelink extensions for a campaign (does NOT publish) | `campaign_id`, `sitelinks` list of {link_text ≤25 chars, final_url, description1 ≤35 chars, description2 ≤35 chars} |
 | `draft_keywords` | Propose keyword additions (does NOT add) | Each keyword needs `text` and `match_type` (EXACT/PHRASE/BROAD) |
 | `add_negative_keywords` | Propose negative keywords (does NOT add) | `campaign_id`, keyword list, `match_type` |
-| `pause_entity` | Propose pausing campaign/ad group/ad/keyword | `entity_type`, `entity_id` |
-| `enable_entity` | Propose enabling paused entity | `entity_type`, `entity_id` |
-| `remove_entity` | Propose REMOVING an entity (irreversible) | `entity_type` (incl. "negative_keyword", "campaign_asset"), `entity_id` |
-| `confirm_and_apply` | Execute a previously previewed change | `plan_id` from a draft tool, `dry_run` (default true) |
+| `list_labels` | Read tool — list all labels in the account | (none) |
+| `draft_label` | Create a Label resource | `name` (REQUIRED), `description`, `background_color` (hex like '#FF5733') |
+| `apply_label` | Attach an existing Label to a campaign / ad_group / ad / keyword | `entity_type`, `entity_id`, `label_id` |
+| `unapply_label` | Detach a Label from one entity (does NOT delete the Label itself) | same as `apply_label` |
+| `pause_entity` | Propose pausing a campaign / ad group / ad / keyword / asset_group | `entity_type`, `entity_id` |
+| `enable_entity` | Propose enabling a paused entity (campaign / ad group / ad / keyword / asset_group) | `entity_type`, `entity_id` |
+| `remove_entity` | Propose REMOVING an entity (irreversible) | `entity_type` (incl. "negative_keyword", "campaign_asset", "asset_group", "label"), `entity_id` |
+| `confirm_and_apply` | Execute a previously previewed change. With `dry_run=true` (default), runs the plan against the Google Ads API with `validate_only=True` — full server-side validation, no changes committed. | `plan_id` from a draft tool, `dry_run` (default true) |
 
 **Write tool workflow:**
 1. Call a `draft_*` tool → returns a preview with a `plan_id`
@@ -130,12 +139,15 @@ These tools call both APIs internally and return unified results with computed `
 4. Only call with `dry_run=false` after explicit user confirmation
 
 **Safety behaviors:**
-- New campaigns and RSAs are created as PAUSED — user must explicitly enable them after review.
+- New campaigns, asset groups, and RSAs are created as PAUSED — user must explicitly enable them after review.
 - `draft_campaign` REQUIRES `geo_target_ids` and `language_ids` — campaigns without targeting waste budget. The tool rejects drafts with missing targeting.
 - `draft_campaign` enforces the `max_daily_budget` safety cap, rejects BROAD match + non-Smart Bidding, and warns if budget is below 5x target CPA.
+- `draft_campaign` rejects `channel_type=PERFORMANCE_MAX` — PMax requires the asset_group + assets + signals to be created in the same mutate as the campaign, which the Search-shaped draft cannot produce. Use `draft_pmax_campaign` for PMax.
+- `draft_pmax_campaign` enforces Smart Bidding (rejects MANUAL_CPC and TARGET_SPEND) and PMax asset minimums (3+ HEADLINE, 1+ LONG_HEADLINE, 2+ DESCRIPTION, 1+ BUSINESS_NAME, 1+ MARKETING_IMAGE / SQUARE_MARKETING_IMAGE / LOGO). Image and logo assets must be pre-uploaded — pass resource_names, not URLs.
 - `update_campaign` replaces geo/language targets entirely (not append). Pass the full desired list.
 - `remove_entity` is IRREVERSIBLE — always prefer `pause_entity` unless the user explicitly wants permanent removal. Removal triggers double confirmation in the safety layer.
-- `remove_entity` supports `entity_type` values: "campaign", "ad_group", "ad", "keyword", "negative_keyword", "campaign_asset". Use "negative_keyword" to remove campaign-level negative keywords. Use "campaign_asset" to remove sitelinks and other asset links from a campaign.
+- `remove_entity` supports `entity_type` values: "campaign", "ad_group", "ad", "keyword", "negative_keyword", "campaign_asset", "asset_group", "label". Use "negative_keyword" to remove campaign-level negative keywords. Use "campaign_asset" to remove sitelinks and other asset links from a campaign. Use "label" to delete a Label resource (cascade-removes all assignments — to detach a single assignment, use `unapply_label` instead).
+- `confirm_and_apply` with `dry_run=true` runs the plan against the Google Ads API with `validate_only=True`. The API performs full validation server-side and returns errors if the plan is malformed (e.g. PMax with `network_settings`, invalid bidding strategy, dangling resource references) — but commits nothing. A passing dry run means the real apply will pass the same validation. A failing dry run returns `status: DRY_RUN_VALIDATION_FAILED` with the actual API error.
 - `require_dry_run: true` in config overrides `dry_run=false` — the user must change the config to allow real mutations.
 - All operations (including dry runs) are logged to `~/.adloop/audit.log`.
 
@@ -195,7 +207,7 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 PMax is structurally different from Search — different tools, different diagnostics, different levers.
 
 1. **Default to `analyze_pmax_performance`.** It pulls campaign + asset groups + assets + channel breakdown + GA4 in one call and returns auto-generated `insights[]`. Don't manually chain `get_pmax_campaigns` + `get_asset_groups` + `get_asset_group_assets` unless you need data the cross-ref tool doesn't surface.
-2. If the user asks specifically about creative quality: present the asset groups sorted by `ad_strength`, then drill into LOW-labeled assets via the `low_performing_assets` arrays.
+2. If the user asks specifically about creative quality: present the asset groups sorted by `ad_strength`, then look at `asset_counts_by_type` and `missing_asset_minimums` to identify groups under-supplied with assets. The per-asset `performance_label` was removed in v24, so individual LOW asset diagnosis is no longer available — `get_asset_group_top_combinations` (which assets actually serve together) is the closest replacement.
 3. If the user asks "where is my budget going?": use the `channel_breakdown` array and emphasize that PMax decides channel mix at serve time. If one channel dominates (>90%), that's worth flagging — Google may be suppressing other surfaces due to weak creative for those formats.
 4. **Do NOT compare PMax CPA to Search CPA directly.** PMax includes Display, YouTube, and Discovery surfaces that have intrinsically different conversion dynamics. Compare PMax CPA to the campaign's `target_cpa` (if set) or to historical PMax CPA, not to a Search benchmark.
 5. **Search terms work differently for PMax.** When users ask "what are people searching for" — explain that PMax does NOT expose individual queries (Google's design), only aggregated category labels via `get_pmax_search_terms`. Don't promise data the API doesn't return.
@@ -279,6 +291,40 @@ PMax is structurally different from Search — different tools, different diagno
    - If the user needs multiple ad groups (e.g., different keyword themes), use `draft_ad_group` to add additional ad groups after the initial campaign is created and confirmed
    - Enable the campaign via `enable_entity` only after ads and sitelinks are in place
 8. Wait for explicit user approval before calling `confirm_and_apply`
+
+### When user wants to create a new Performance Max campaign
+
+PMax is structurally different — there is no `draft_campaign` path for it. PMax requires the campaign + asset group + assets + signals to be created in the same atomic mutate.
+
+1. Call `get_pmax_campaigns` to see existing PMax campaigns and avoid name duplicates
+2. Confirm the user has uploaded the required image and logo assets to the account already (the API requires resource_names — image/logo binary upload is not supported through this MCP). If not, point them to the Google Ads UI or ask for resource_names of pre-uploaded assets.
+3. **Pre-write checks (CRITICAL):**
+   - **Bidding strategy**: PMax accepts only Smart Bidding — `MAXIMIZE_CONVERSIONS`, `MAXIMIZE_CONVERSION_VALUE`, `TARGET_CPA`, `TARGET_ROAS`. The tool rejects MANUAL_CPC and TARGET_SPEND for PMax.
+   - **Geo targeting**: ALWAYS ask the user which countries/regions to target.
+   - **Language targeting**: ALWAYS ask the user which languages.
+   - **Asset minimums**: 3-5 headlines (≤30 chars), 1-5 long_headlines (≤90 chars), 2-5 descriptions (≤90 chars), 1 business_name (≤25 chars), at least 1 marketing_image, 1 square_marketing_image, 1 logo (resource_names of pre-uploaded assets).
+   - **Conversion tracking**: PMax depends heavily on Smart Bidding signals. Call `attribution_check` — if zero conversions across the board, WARN that PMax won't optimize without tracking working first.
+   - **Budget**: ideally ≥ 5x target CPA; the tool warns otherwise.
+4. Call `draft_pmax_campaign` with campaign details + the full `asset_group` dict (name, final_urls, headlines, long_headlines, descriptions, business_name, marketing_image_assets, square_marketing_image_assets, logo_assets, and optionally search_themes / audience_resource_names).
+5. Present the complete preview to the user — emphasize the campaign will be created as PAUSED.
+6. Call `confirm_and_apply(plan_id=..., dry_run=true)` first — this runs `validate_only=True` against Google Ads and surfaces any API rejections (e.g. invalid asset shapes, missing minimums) before applying for real.
+7. After dry run passes and user approves, call `confirm_and_apply(plan_id=..., dry_run=false)`.
+8. Remind the user to enable the PMax campaign via `enable_entity(entity_type='campaign', entity_id=...)` after reviewing in Google Ads UI.
+
+### When user wants to add a new asset group, more assets, or signals to an existing PMax campaign
+
+- **New asset group**: `draft_asset_group(campaign_id, asset_group=...)` — same `asset_group` shape as `draft_pmax_campaign`. Each asset group has independent assets and is its own creative bundle.
+- **More assets on an existing asset group**: `draft_asset_group_assets(asset_group_id, headlines=[...], long_headlines=[...], descriptions=[...], business_name=..., marketing_image_assets=[...], square_marketing_image_assets=[...], logo_assets=[...], youtube_video_ids=[...])` — pass only what you want to add. Text and YouTube assets are created inline; images/logos must already exist as Asset resources (pass resource_names).
+- **New signal on an existing asset group**: `draft_asset_group_signal(asset_group_id, search_theme="..." OR audience_resource_name="customers/.../audiences/...")`. Pass exactly one. Search themes are immutable — to "edit" one, remove and re-add.
+
+To pause/enable an asset group, use `pause_entity`/`enable_entity` with `entity_type="asset_group"`. To remove one, use `remove_entity` (irreversible).
+
+### When user wants to add labels or filter by label
+
+1. Call `list_labels` to discover existing labels.
+2. To create a new label, call `draft_label(name, description=..., background_color="#RRGGBB")`, then `confirm_and_apply`.
+3. To attach a label, call `apply_label(entity_type='campaign'|'ad_group'|'ad'|'keyword', entity_id=..., label_id=...)`. The label must already exist — capture the `label_id` from `list_labels` or from the result of `draft_label` + apply.
+4. To detach a label from one entity, call `unapply_label` with the same args. To delete the Label resource itself (cascades), use `remove_entity(entity_type='label', entity_id=...)`.
 
 ### When user wants to add an ad group to an existing campaign
 
@@ -397,7 +443,7 @@ LIMIT n
 | `bidding_strategy` | Bidding strategy details |
 | `customer_client` | List accounts under an MCC (uses login_customer_id) |
 | `asset_group` | Performance Max asset groups (PMax equivalent of ad groups) |
-| `asset_group_asset` | Individual assets in PMax asset groups with field_type + performance_label |
+| `asset_group_asset` | Individual assets in PMax asset groups with field_type, status, policy review_status (no `performance_label` in v24) |
 | `asset_group_signal` | Search themes and audience signals attached to PMax asset groups |
 | `asset_group_top_combination_view` | Top serving combinations Google has assembled for PMax |
 | `campaign_search_term_insight` | Aggregated PMax search-term categories (v23.2+, no individual queries) |
@@ -437,12 +483,17 @@ LIMIT n
 
 **Performance Max fields:**
 - `campaign.advertising_channel_type = 'PERFORMANCE_MAX'` — filter for PMax campaigns
-- `campaign.url_expansion_opt_out` — boolean; when true, PMax only sends traffic to provided final URLs
 - `campaign.brand_guidelines_enabled` — boolean; when true, business name + logos are at campaign level not asset group
 - `asset_group.id`, `asset_group.name`, `asset_group.status`, `asset_group.ad_strength` (POOR/AVERAGE/GOOD/EXCELLENT)
 - `asset_group_asset.field_type` (HEADLINE, DESCRIPTION, MARKETING_IMAGE, LOGO, YOUTUBE_VIDEO, etc.)
-- `asset_group_asset.performance_label` (LOW, GOOD, BEST, PENDING)
+- `asset_group_asset.policy_summary.review_status`, `asset_group_asset.status`
 - `asset_group_signal.search_theme.text`, `asset_group_signal.audience.audience`
+
+**Removed in API v24 — DO NOT use:**
+- `campaign.url_expansion_opt_out` (and `campaign.url_expansion_optimization`) — replaced by `Campaign.asset_automation_settings` with `AssetAutomationType=FINAL_URL_EXPANSION_TEXT_ASSET_AUTOMATION`.
+- `asset_group_asset.performance_label` — the LOW/GOOD/BEST/PENDING per-asset rating is no longer populated. Look at `asset_group_top_combination_view` (which assets actually serve) or query metrics on `asset_field_type_view` for per-field-type performance.
+- `metrics.cost_micros`, `metrics.conversions`, `metrics.conversions_value` on `campaign_search_term_insight` — the API returns PROHIBITED_METRIC_IN_SELECT_OR_WHERE_CLAUSE. Only `metrics.clicks` and `metrics.impressions` are selectable on this resource.
+- Any `metrics.*` on `asset_group_top_combination_view` — PROHIBITED_METRIC. The view exposes only `asset_group_top_combination_view.asset_group_top_combinations` (a repeated message).
 
 ### Date Ranges
 
@@ -511,15 +562,20 @@ WHERE campaign.advertising_channel_type = 'PERFORMANCE_MAX'
 ORDER BY metrics.cost_micros DESC
 ```
 
-**Performance Max LOW-performing assets (replacement candidates):**
+**Performance Max — list all assets in an asset group:**
 ```sql
 SELECT asset_group.id, asset_group.name,
-       asset_group_asset.field_type, asset.text_asset.text,
+       asset_group_asset.field_type,
+       asset_group_asset.status,
+       asset_group_asset.policy_summary.review_status,
+       asset.text_asset.text,
        asset.image_asset.full_size.url
 FROM asset_group_asset
-WHERE asset_group_asset.performance_label = 'LOW'
+WHERE asset_group.id = 6572147947
   AND asset_group_asset.status != 'REMOVED'
 ```
+
+(`asset_group_asset.performance_label` was removed in v24 — see "Removed in API v24" above.)
 
 ## Ad Copy Character Limits
 
@@ -593,4 +649,4 @@ When advising on Google Ads:
 - **Display paths**: Always set `path1` and `path2` on RSAs. They cost nothing, improve ad relevance, and make the display URL informative (e.g. `example.com/Features/Pricing` instead of bare `example.com`). Derive them from the landing page path or the ad's core message. Max 15 chars each.
 - **Sitelinks**: Every campaign should have at least 4 sitelinks. They increase ad real estate (more screen space = higher CTR), direct users to key pages, and are free. Good candidates: pricing, features, signup/trial, about, key product pages. Use `draft_sitelinks` to create them. Link text max 25 chars, descriptions max 35 chars each.
 - **Clicks vs sessions gap**: Never report a clicks > sessions discrepancy as a tracking bug without first accounting for GDPR consent. In the EU, 30-70% of users may reject analytics cookies. This is normal, not broken.
-- **Performance Max specifics**: PMax campaigns are Smart Bidding only (`MAXIMIZE_CONVERSIONS` or `MAXIMIZE_CONVERSION_VALUE`) — no MANUAL_CPC option, so the BROAD-match-without-Smart-Bidding rule doesn't apply. Channel mix is decided by Google at serve time; you cannot directly target Search-only or YouTube-only. Asset groups should ideally have `ad_strength = GOOD` or better and zero `LOW`-labeled assets — replace LOW assets first before touching budget. PMax search-term insights expose categories only, not individual queries.
+- **Performance Max specifics**: PMax campaigns are Smart Bidding only (`MAXIMIZE_CONVERSIONS` or `MAXIMIZE_CONVERSION_VALUE`) — no MANUAL_CPC option, so the BROAD-match-without-Smart-Bidding rule doesn't apply. Channel mix is decided by Google at serve time; you cannot directly target Search-only or YouTube-only. Asset groups should ideally have `ad_strength = GOOD` or better, and they should meet Google's documented asset-type minimums (3+ HEADLINE, 1+ LONG_HEADLINE, 2+ DESCRIPTION, etc. — `analyze_pmax_performance` flags any below-minimum groups). PMax search-term insights expose categories only, not individual queries. **Use the Google Ads UI to upload images and logos** — the MCP doesn't do binary upload; pass pre-uploaded Asset resource_names to `draft_pmax_campaign` / `draft_asset_group_assets`.
