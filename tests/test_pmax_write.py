@@ -231,6 +231,50 @@ class TestDraftPmaxCampaign:
         details = " ".join(result["details"])
         assert "resource_names" in details or "customers/" in details
 
+    def test_requires_business_name_when_omitted(self, config):
+        # Regression: omitting business_name silently skipped the minimum
+        # check, so the asset group passed draft validation and only failed
+        # at apply-time API validation. Now caught at draft.
+        bad = _valid_asset_group()
+        bad["business_name"] = ""
+        result = draft_pmax_campaign(
+            config,
+            customer_id="1234567890",
+            campaign_name="PMax Test",
+            daily_budget=20.0,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+            asset_group=bad,
+        )
+
+        assert "error" in result
+        details = " ".join(result["details"])
+        assert "BUSINESS_NAME" in details
+
+    def test_rejects_too_many_marketing_images(self, config):
+        # Regression: image lists were checked against minimums but not
+        # maximums. ASSET_MAXIMUMS["MARKETING_IMAGE"] = 20.
+        bad = _valid_asset_group()
+        bad["marketing_image_assets"] = [
+            f"customers/1234567890/assets/{i}" for i in range(1, 22)
+        ]
+        result = draft_pmax_campaign(
+            config,
+            customer_id="1234567890",
+            campaign_name="PMax Test",
+            daily_budget=20.0,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+            asset_group=bad,
+        )
+
+        assert "error" in result
+        details = " ".join(result["details"])
+        assert "at most 20" in details
+        assert "MARKETING_IMAGE" in details
+
 
 # ---------------------------------------------------------------------------
 # draft_asset_group

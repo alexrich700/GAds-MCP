@@ -459,14 +459,16 @@ def _validate_asset_group(asset_group: dict) -> list[str]:
     if path2 and len(path2) > 15:
         errors.append(f"asset_group.path2 exceeds 15 chars ({len(path2)}): '{path2}'")
 
+    business_name = asset_group.get("business_name") or ""
+    # Always include BUSINESS_NAME — even when omitted — so the minimum check
+    # fires. Otherwise an empty business_name skips validation and the
+    # asset group fails apply-time API validation instead of draft-time.
     text_groups = {
         "HEADLINE": asset_group.get("headlines") or [],
         "LONG_HEADLINE": asset_group.get("long_headlines") or [],
         "DESCRIPTION": asset_group.get("descriptions") or [],
+        "BUSINESS_NAME": [business_name] if business_name else [],
     }
-    business_name = asset_group.get("business_name") or ""
-    if business_name:
-        text_groups["BUSINESS_NAME"] = [business_name]
 
     for ftype, items in text_groups.items():
         for i, text in enumerate(items, start=1):
@@ -504,6 +506,12 @@ def _validate_asset_group(asset_group: dict) -> list[str]:
                 f"{ftype} asset resource_name(s) — pre-upload images via the "
                 f"Google Ads UI or AssetService.MutateAssets, then pass the "
                 f"resource_names. Got {len(items)}."
+            )
+        maximum = ASSET_MAXIMUMS.get(ftype, 999)
+        if len(items) > maximum:
+            errors.append(
+                f"asset_group accepts at most {maximum} {ftype} "
+                f"asset resource_name(s), got {len(items)}."
             )
 
     return errors
