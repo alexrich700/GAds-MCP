@@ -430,11 +430,15 @@ def remove_entity(
     entity_type: str = "",
     entity_id: str = "",
 ) -> dict:
-    """Draft removing an entity (keyword, negative_keyword, ad, ad_group, campaign).
+    """Draft removing an entity — DESTRUCTIVE.
 
-    This is a DESTRUCTIVE operation — removed entities cannot be re-enabled.
-    For keywords and negative keywords, this fully deletes the criterion.
-    Returns a preview; call confirm_and_apply to execute.
+    Supported entity_type values: campaign, ad_group, ad, keyword,
+    negative_keyword, campaign_asset, asset_group, asset_group_signal, label.
+
+    Removed entities cannot be re-enabled. For asset_group_signal the
+    entity_id is the composite ``{asset_group_id}~{criterion_id}`` as
+    returned by ``get_asset_group_signals``. Returns a preview; call
+    confirm_and_apply to execute.
     """
     from adloop.safety.guards import SafetyViolation, check_blocked_operation
     from adloop.safety.preview import ChangePlan, store_plan
@@ -1001,6 +1005,7 @@ _VALID_ENTITY_TYPES = {"campaign", "ad_group", "ad", "keyword", "asset_group"}
 _REMOVABLE_ENTITY_TYPES = _VALID_ENTITY_TYPES | {
     "negative_keyword",
     "campaign_asset",
+    "asset_group_signal",
     "label",
 }
 
@@ -1615,7 +1620,7 @@ def _apply_create_campaign(
     num_geo = len(changes.get("geo_target_ids") or [])
     num_lang = len(changes.get("language_ids") or [])
     for i, resp in enumerate(response.mutate_operation_responses):
-        resp_type = resp.WhichOneof("response")
+        resp_type = type(resp).pb(resp).WhichOneof("response")
         if resp_type:
             inner = getattr(resp, resp_type)
             resource = getattr(inner, "resource_name", str(inner))
@@ -1686,7 +1691,7 @@ def _apply_create_ad_group(
 
     results: dict = {}
     for i, resp in enumerate(response.mutate_operation_responses):
-        resp_type = resp.WhichOneof("response")
+        resp_type = type(resp).pb(resp).WhichOneof("response")
         if resp_type:
             inner = getattr(resp, resp_type)
             resource = getattr(inner, "resource_name", str(inner))
@@ -2162,6 +2167,25 @@ def _apply_remove(
         operation = client.get_type("AssetGroupOperation")
         operation.remove = service.asset_group_path(cid, entity_id)
         response = service.mutate_asset_groups(
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
+        )
+
+    elif entity_type == "asset_group_signal":
+        # Composite id format: {asset_group_id}~{criterion_id}, matching
+        # Google's assetGroupSignals resource_name suffix.
+        if "~" not in entity_id:
+            raise ValueError(
+                f"asset_group_signal entity_id must be "
+                f"'assetGroupId~criterionId', got '{entity_id}'"
+            )
+        service = client.get_service("AssetGroupSignalService")
+        operation = client.get_type("AssetGroupSignalOperation")
+        operation.remove = f"customers/{cid}/assetGroupSignals/{entity_id}"
+        response = service.mutate_asset_group_signals(
             request={
                 "customer_id": cid,
                 "operations": [operation],

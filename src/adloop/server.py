@@ -964,6 +964,7 @@ def draft_pmax_campaign(
     target_cpa: float = 0,
     target_roas: float = 0,
     final_url_suffix: str | None = None,
+    brand_guidelines_enabled: bool = True,
 ) -> dict:
     """Draft a Performance Max campaign with its first asset group — returns PREVIEW.
 
@@ -975,6 +976,12 @@ def draft_pmax_campaign(
         MAXIMIZE_CONVERSIONS | MAXIMIZE_CONVERSION_VALUE | TARGET_CPA | TARGET_ROAS
     target_cpa / target_roas: required when bidding_strategy is the matching name.
     geo_target_ids / language_ids: REQUIRED — same constants as draft_campaign.
+
+    brand_guidelines_enabled: defaults to True (matches Google's new PMax
+        default). When True, BUSINESS_NAME and the first LOGO are also linked
+        at the campaign level via CampaignAsset — required for the mutate to
+        succeed on Brand-Guidelines-defaulted accounts. Pass False to opt
+        out (assets stay at the asset-group level only).
 
     asset_group dict: see draft_pmax_campaign in pmax_write.py. Keys:
         - name (str): asset group name
@@ -994,9 +1001,9 @@ def draft_pmax_campaign(
         - search_themes (list[str], optional): SearchTheme signal phrases
         - audience_resource_names (list[str], optional): Audience resource_names
 
-    NOTE: image/logo assets cannot be created inline through this MCP — pre-
-    upload via Google Ads UI or AssetService.MutateAssets, then pass the
-    resource_name strings.
+    NOTE: image/logo assets cannot be created inline through this MCP — use
+    draft_image_asset to upload local JPG/PNG/GIF files, or paste resource_names
+    of assets already uploaded via the Google Ads UI.
 
     Call confirm_and_apply with the returned plan_id to execute. The new
     campaign is created as PAUSED — enable_entity it after review.
@@ -1014,6 +1021,7 @@ def draft_pmax_campaign(
         geo_target_ids=geo_target_ids,
         language_ids=language_ids,
         final_url_suffix=final_url_suffix,
+        brand_guidelines_enabled=brand_guidelines_enabled,
         asset_group=asset_group,
     )
 
@@ -1620,11 +1628,14 @@ def remove_entity(
     """Draft REMOVING an entity — returns a PREVIEW. This is IRREVERSIBLE.
 
     entity_type: "campaign", "ad_group", "ad", "keyword", "negative_keyword",
-                 "asset_group", "campaign_asset", or "label"
+                 "asset_group", "asset_group_signal", "campaign_asset", or
+                 "label"
     entity_id: The resource ID. For keywords use "adGroupId~criterionId".
                For negative_keywords use the campaign criterion ID.
                For campaign_assets use "campaignId~assetId~fieldType".
                For asset_groups use the asset group ID.
+               For asset_group_signals use "assetGroupId~criterionId" (the
+               format `get_asset_group_signals` returns).
                For labels use the label ID (cascades to all assignments).
 
     WARNING: Removed entities cannot be re-enabled. Use pause_entity instead

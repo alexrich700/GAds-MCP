@@ -103,6 +103,7 @@ def draft_pmax_campaign(
     geo_target_ids: list[str] | None = None,
     language_ids: list[str] | None = None,
     final_url_suffix: str | None = None,
+    brand_guidelines_enabled: bool = True,
     asset_group: dict | None = None,
 ) -> dict:
     """Draft a Performance Max campaign with its first asset group.
@@ -140,6 +141,14 @@ def draft_pmax_campaign(
         - ``search_themes`` (list[str], optional): search-theme signal phrases.
         - ``audience_resource_names`` (list[str], optional): resource_names of
           existing Audience resources to use as audience signals.
+
+    brand_guidelines_enabled: defaults to True, matching Google's new default
+        for PMax campaigns. When True, the BUSINESS_NAME text asset and the
+        first LOGO asset are also linked at the campaign level via
+        ``CampaignAsset`` — the API otherwise rejects the mutate with
+        ``REQUIRED_BUSINESS_NAME_ASSET_NOT_LINKED`` /
+        ``REQUIRED_LOGO_ASSET_NOT_LINKED``. Set to False to opt out of Brand
+        Guidelines (assets stay at the asset-group level only).
 
     NOTE: image and logo Assets are not inline-creatable inside this mutate.
     Upload them first via ``draft_image_asset`` (point at local JPG/PNG/GIF
@@ -189,6 +198,7 @@ def draft_pmax_campaign(
             "geo_target_ids": geo_target_ids or [],
             "language_ids": language_ids or [],
             "final_url_suffix": final_url_suffix or "",
+            "brand_guidelines_enabled": brand_guidelines_enabled,
             "asset_group": asset_group,
         },
     )
@@ -768,6 +778,11 @@ def _apply_create_pmax_campaign(
         client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
     )
 
+    if changes.get("brand_guidelines_enabled"):
+        campaign.brand_guidelines_enabled = True
+    else:
+        campaign.brand_guidelines_enabled = False
+
     if changes.get("final_url_suffix"):
         campaign.final_url_suffix = changes["final_url_suffix"]
 
@@ -790,16 +805,40 @@ def _apply_create_pmax_campaign(
         operations.append(lang_op)
 
     # --- 4-7. Asset group + assets + signals ---
-    operations.extend(
-        _build_asset_group_operations(
-            client=client,
-            cid=cid,
-            campaign_resource_name=campaign_path,
-            asset_group_data=asset_group_data,
-            asset_temp_id_start=-10,
-            asset_group_temp_id="-100",
-        )
+    ag_operations, exposed = _build_asset_group_operations(
+        client=client,
+        cid=cid,
+        campaign_resource_name=campaign_path,
+        asset_group_data=asset_group_data,
+        asset_temp_id_start=-10,
+        asset_group_temp_id="-100",
     )
+    operations.extend(ag_operations)
+
+    # --- 8. CampaignAsset links for Brand Guidelines ---
+    # New PMax campaigns default to brand_guidelines_enabled=True on Google's
+    # side. With that flag on, BUSINESS_NAME and LOGO assets MUST be linked
+    # at the campaign level via CampaignAsset (the asset_group-level link is
+    # not sufficient). The API otherwise rejects the mutate with
+    # REQUIRED_BUSINESS_NAME_ASSET_NOT_LINKED / REQUIRED_LOGO_ASSET_NOT_LINKED.
+    if changes.get("brand_guidelines_enabled"):
+        business_name_rn = exposed.get("business_name_asset")
+        if business_name_rn:
+            bn_link_op = client.get_type("MutateOperation")
+            bn_link = bn_link_op.campaign_asset_operation.create
+            bn_link.asset = business_name_rn
+            bn_link.campaign = campaign_path
+            bn_link.field_type = client.enums.AssetFieldTypeEnum.BUSINESS_NAME
+            operations.append(bn_link_op)
+
+        logo_assets = asset_group_data.get("logo_assets") or []
+        if logo_assets:
+            logo_link_op = client.get_type("MutateOperation")
+            logo_link = logo_link_op.campaign_asset_operation.create
+            logo_link.asset = logo_assets[0]
+            logo_link.campaign = campaign_path
+            logo_link.field_type = client.enums.AssetFieldTypeEnum.LOGO
+            operations.append(logo_link_op)
 
     response = service.mutate(
         request={
@@ -819,9 +858,14 @@ def _apply_create_pmax_campaign(
         "asset_count": 0,
         "asset_group_assets": [],
         "asset_group_signals": [],
+        "campaign_assets": [],
     }
     for resp in response.mutate_operation_responses:
-        resp_type = resp.WhichOneof("response")
+        # proto-plus's wrapper of MutateOperationResponse does not always
+        # expose WhichOneof as a method — calling it on the wrapper raises
+        # "Unknown field for MutateOperationResponse: WhichOneof". Drop to
+        # the underlying protobuf via type(resp).pb(resp).
+        resp_type = type(resp).pb(resp).WhichOneof("response")
         if not resp_type:
             continue
         rn = getattr(getattr(resp, resp_type), "resource_name", None)
@@ -839,6 +883,8 @@ def _apply_create_pmax_campaign(
             results["asset_group_assets"].append(rn)
         elif resp_type == "asset_group_signal_result":
             results["asset_group_signals"].append(rn)
+        elif resp_type == "campaign_asset_result":
+            results["campaign_assets"].append(rn)
 
     return results
 
@@ -855,7 +901,9 @@ def _apply_create_asset_group(
     campaign_service = client.get_service("CampaignService")
 
     campaign_path = campaign_service.campaign_path(cid, changes["campaign_id"])
-    operations = _build_asset_group_operations(
+    # Brand-guidelines CampaignAsset links already live on the parent
+    # campaign — adding a new asset group does not require re-creating them.
+    operations, _exposed = _build_asset_group_operations(
         client=client,
         cid=cid,
         campaign_resource_name=campaign_path,
@@ -877,7 +925,7 @@ def _apply_create_asset_group(
 
     results: dict = {"asset_group": None, "asset_count": 0, "links": [], "signals": []}
     for resp in response.mutate_operation_responses:
-        resp_type = resp.WhichOneof("response")
+        resp_type = type(resp).pb(resp).WhichOneof("response")
         if not resp_type:
             continue
         rn = getattr(getattr(resp, resp_type), "resource_name", None)
@@ -973,7 +1021,7 @@ def _apply_create_asset_group_assets(
 
     results: dict = {"assets": [], "links": []}
     for resp in response.mutate_operation_responses:
-        resp_type = resp.WhichOneof("response")
+        resp_type = type(resp).pb(resp).WhichOneof("response")
         if not resp_type:
             continue
         rn = getattr(getattr(resp, resp_type), "resource_name", None)
@@ -1098,13 +1146,19 @@ def _build_asset_group_operations(
     asset_group_data: dict,
     asset_temp_id_start: int,
     asset_group_temp_id: str,
-) -> list:
+) -> tuple[list, dict]:
     """Build the slice of MutateOperations that creates an asset group.
 
     The order follows Google's "AssetOperations consecutive, before
     AssetGroupAssets" requirement: all Asset.create ops first, then
     AssetGroup.create, then AssetGroupAsset.create links, then
     AssetGroupSignal.create.
+
+    Returns ``(operations, exposed_resource_names)``. ``exposed_resource_names``
+    keys the BUSINESS_NAME text asset's temp resource_name so the caller can
+    link it as a CampaignAsset when Brand Guidelines is enabled (the API
+    requires BUSINESS_NAME and LOGO to live at the campaign level, not just
+    at the asset-group level).
     """
     asset_service = client.get_service("AssetService")
     asset_group_service = client.get_service("AssetGroupService")
@@ -1116,6 +1170,7 @@ def _build_asset_group_operations(
     # build AssetGroupAsset links after the AssetGroup itself is created.
     text_assets: list[tuple[str, str]] = []  # (resource_name, field_type)
     video_assets: list[str] = []  # resource_names
+    business_name_resource: str | None = None
     next_temp = asset_temp_id_start
 
     text_groups = {
@@ -1135,6 +1190,8 @@ def _build_asset_group_operations(
             asset.text_asset.text = text
             operations.append(asset_op)
             text_assets.append((asset.resource_name, field_type))
+            if field_type == "BUSINESS_NAME":
+                business_name_resource = asset.resource_name
             next_temp -= 1
 
     # --- 4b. YouTube video Asset operations ---
@@ -1209,7 +1266,7 @@ def _build_asset_group_operations(
         signal.audience.audience = audience_rn
         operations.append(sig_op)
 
-    return operations
+    return operations, {"business_name_asset": business_name_resource}
 
 
 # ---------------------------------------------------------------------------

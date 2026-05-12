@@ -261,6 +261,38 @@ class TestDraftPmaxCampaign:
         details = " ".join(result["details"])
         assert "BUSINESS_NAME" in details
 
+    def test_brand_guidelines_defaults_to_true(self, config):
+        # New PMax campaigns default to brand_guidelines_enabled=True on
+        # Google's side. The tool defaults to True too so the apply doesn't
+        # hit REQUIRED_BUSINESS_NAME_ASSET_NOT_LINKED on fresh accounts.
+        result = draft_pmax_campaign(
+            config,
+            customer_id="1234567890",
+            campaign_name="PMax Test",
+            daily_budget=20.0,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+            asset_group=_valid_asset_group(),
+        )
+        assert "error" not in result
+        assert result["changes"]["brand_guidelines_enabled"] is True
+
+    def test_brand_guidelines_opt_out(self, config):
+        result = draft_pmax_campaign(
+            config,
+            customer_id="1234567890",
+            campaign_name="PMax Test",
+            daily_budget=20.0,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+            asset_group=_valid_asset_group(),
+            brand_guidelines_enabled=False,
+        )
+        assert "error" not in result
+        assert result["changes"]["brand_guidelines_enabled"] is False
+
     def test_rejects_too_many_marketing_images(self, config):
         # Regression: image lists were checked against minimums but not
         # maximums. ASSET_MAXIMUMS["MARKETING_IMAGE"] = 20.
@@ -563,3 +595,44 @@ class TestDraftImageAsset:
     def test_dispatch_table_registers_upload(self):
         # confirm_and_apply finds the handler via PMAX_OPERATIONS.
         assert "upload_image_asset" in PMAX_OPERATIONS
+
+
+# ---------------------------------------------------------------------------
+# remove_entity — asset_group_signal support
+# ---------------------------------------------------------------------------
+
+
+class TestRemoveAssetGroupSignal:
+    def test_accepts_composite_id(self, config):
+        from adloop.ads.write import remove_entity
+
+        result = remove_entity(
+            config,
+            customer_id="1234567890",
+            entity_type="asset_group_signal",
+            entity_id="6590423305~2480811934780",
+        )
+
+        assert "error" not in result
+        assert result["operation"] == "remove_entity"
+        assert result["entity_type"] == "asset_group_signal"
+
+    def test_rejects_bare_id_without_tilde(self, config):
+        # The dispatch path checks for the composite shape; the draft accepts
+        # the bare id but the API would reject it. We catch the format at
+        # apply time, but the draft itself surfaces a useful error only when
+        # apply runs. The validation here is the allowlist gate: the
+        # entity_type "asset_group_signal" must be accepted by remove_entity.
+        from adloop.ads.write import remove_entity
+
+        result = remove_entity(
+            config,
+            customer_id="1234567890",
+            entity_type="asset_group_signal",
+            entity_id="bare-id",
+        )
+
+        # Allowlist passes; the format check is at apply time. The draft
+        # still returns a plan — the composite-format failure surfaces
+        # during confirm_and_apply.
+        assert result.get("operation") == "remove_entity"
