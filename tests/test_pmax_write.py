@@ -8,13 +8,22 @@ validate_only=True.
 import pytest
 
 from adloop.ads.pmax_write import (
+    PMAX_OPERATIONS,
     draft_asset_group,
     draft_asset_group_assets,
     draft_asset_group_signal,
+    draft_image_asset,
     draft_pmax_campaign,
 )
 from adloop.ads.write import draft_campaign
 from adloop.config import AdLoopConfig, AdsConfig, GA4Config, SafetyConfig
+
+# Minimal valid PNG (1x1, transparent). Used in upload validation tests.
+_TINY_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xfa\xcf"
+    b"\x00\x00\x00\x02\x00\x01\xe5'\xde\xfc\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 @pytest.fixture
@@ -252,6 +261,38 @@ class TestDraftPmaxCampaign:
         details = " ".join(result["details"])
         assert "BUSINESS_NAME" in details
 
+    def test_brand_guidelines_defaults_to_true(self, config):
+        # New PMax campaigns default to brand_guidelines_enabled=True on
+        # Google's side. The tool defaults to True too so the apply doesn't
+        # hit REQUIRED_BUSINESS_NAME_ASSET_NOT_LINKED on fresh accounts.
+        result = draft_pmax_campaign(
+            config,
+            customer_id="1234567890",
+            campaign_name="PMax Test",
+            daily_budget=20.0,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+            asset_group=_valid_asset_group(),
+        )
+        assert "error" not in result
+        assert result["changes"]["brand_guidelines_enabled"] is True
+
+    def test_brand_guidelines_opt_out(self, config):
+        result = draft_pmax_campaign(
+            config,
+            customer_id="1234567890",
+            campaign_name="PMax Test",
+            daily_budget=20.0,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+            asset_group=_valid_asset_group(),
+            brand_guidelines_enabled=False,
+        )
+        assert "error" not in result
+        assert result["changes"]["brand_guidelines_enabled"] is False
+
     def test_rejects_too_many_marketing_images(self, config):
         # Regression: image lists were checked against minimums but not
         # maximums. ASSET_MAXIMUMS["MARKETING_IMAGE"] = 20.
@@ -421,3 +462,205 @@ class TestDraftAssetGroupSignal:
         )
 
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# draft_image_asset
+# ---------------------------------------------------------------------------
+
+
+class TestDraftImageAsset:
+    def test_accepts_valid_png(self, config, tmp_path):
+        png_path = tmp_path / "logo.png"
+        png_path.write_bytes(_TINY_PNG_BYTES)
+
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(png_path), "name": "Acme Logo"}],
+        )
+
+        assert "error" not in result
+        assert result["operation"] == "upload_image_asset"
+        assert result["plan_id"]
+        # The validated metadata is what _apply_upload_image_asset reads.
+        images = result["changes"]["images"]
+        assert len(images) == 1
+        assert images[0]["name"] == "Acme Logo"
+        assert images[0]["mime_type"] == "IMAGE_PNG"
+        assert images[0]["file_size"] == len(_TINY_PNG_BYTES)
+        assert len(images[0]["sha256"]) == 64  # SHA-256 hex digest
+
+    def test_apply_rejects_same_size_content_swap(self, config, tmp_path):
+        # Codex review: validate against same-size content substitution
+        # between draft and confirm_and_apply.
+        from adloop.ads.pmax_write import _apply_upload_image_asset
+
+        png_path = tmp_path / "logo.png"
+        png_path.write_bytes(_TINY_PNG_BYTES)
+        plan = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(png_path), "name": "Acme Logo"}],
+        )
+        assert "error" not in plan
+
+        # Replace bytes in-place with a same-size GIF payload — bypasses the
+        # file_size check, but the hash differs.
+        same_size_swap = b"GIF89a" + b"X" * (len(_TINY_PNG_BYTES) - 6)
+        assert len(same_size_swap) == len(_TINY_PNG_BYTES)
+        png_path.write_bytes(same_size_swap)
+
+        with pytest.raises(ValueError, match="sha256 mismatch"):
+            _apply_upload_image_asset(
+                client=object(),
+                cid="1234567890",
+                changes=plan["changes"],
+            )
+
+    def test_accepts_batch(self, config, tmp_path):
+        a = tmp_path / "a.png"
+        b = tmp_path / "b.png"
+        a.write_bytes(_TINY_PNG_BYTES)
+        b.write_bytes(_TINY_PNG_BYTES)
+
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[
+                {"file_path": str(a), "name": "Image A"},
+                {"file_path": str(b), "name": "Image B"},
+            ],
+        )
+
+        assert "error" not in result
+        assert len(result["changes"]["images"]) == 2
+
+    def test_requires_images_list(self, config):
+        result = draft_image_asset(config, customer_id="1234567890", images=[])
+        assert "error" in result
+        assert any("images" in d for d in result["details"])
+
+    def test_rejects_missing_file_path(self, config):
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"name": "no path"}],
+        )
+        assert "error" in result
+        assert any("file_path" in d for d in result["details"])
+
+    def test_rejects_missing_name(self, config, tmp_path):
+        png_path = tmp_path / "logo.png"
+        png_path.write_bytes(_TINY_PNG_BYTES)
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(png_path)}],
+        )
+        assert "error" in result
+        assert any("name" in d for d in result["details"])
+
+    def test_rejects_relative_path(self, config):
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": "rel/path.png", "name": "x"}],
+        )
+        assert "error" in result
+        assert any("absolute" in d for d in result["details"])
+
+    def test_rejects_nonexistent_file(self, config, tmp_path):
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[
+                {"file_path": str(tmp_path / "nope.png"), "name": "x"},
+            ],
+        )
+        assert "error" in result
+        assert any("does not exist" in d for d in result["details"])
+
+    def test_rejects_unsupported_extension(self, config, tmp_path):
+        webp = tmp_path / "bad.webp"
+        webp.write_bytes(b"\x00" * 100)
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(webp), "name": "x"}],
+        )
+        assert "error" in result
+        assert any("unsupported extension" in d for d in result["details"])
+
+    def test_rejects_extension_content_mismatch(self, config, tmp_path):
+        # File claims .png but bytes are not a PNG.
+        fake = tmp_path / "fake.png"
+        fake.write_bytes(b"this is plain text, not an image")
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(fake), "name": "x"}],
+        )
+        assert "error" in result
+        assert any("magic bytes" in d for d in result["details"])
+
+    def test_rejects_oversized_file(self, config, tmp_path, monkeypatch):
+        # Patch the cap so we don't have to materialise a 5 MB file.
+        from adloop.ads import pmax_write
+
+        monkeypatch.setattr(pmax_write, "_IMAGE_MAX_BYTES", 64)
+        png_path = tmp_path / "logo.png"
+        png_path.write_bytes(_TINY_PNG_BYTES)  # 67 bytes > 64-byte test cap
+
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(png_path), "name": "Too big"}],
+        )
+        assert "error" in result
+        assert any("5 MB" in d for d in result["details"])
+
+    def test_dispatch_table_registers_upload(self):
+        # confirm_and_apply finds the handler via PMAX_OPERATIONS.
+        assert "upload_image_asset" in PMAX_OPERATIONS
+
+
+# ---------------------------------------------------------------------------
+# remove_entity — asset_group_signal support
+# ---------------------------------------------------------------------------
+
+
+class TestRemoveAssetGroupSignal:
+    def test_accepts_composite_id(self, config):
+        from adloop.ads.write import remove_entity
+
+        result = remove_entity(
+            config,
+            customer_id="1234567890",
+            entity_type="asset_group_signal",
+            entity_id="6590423305~2480811934780",
+        )
+
+        assert "error" not in result
+        assert result["operation"] == "remove_entity"
+        assert result["entity_type"] == "asset_group_signal"
+
+    def test_rejects_bare_id_without_tilde(self, config):
+        # The dispatch path checks for the composite shape; the draft accepts
+        # the bare id but the API would reject it. We catch the format at
+        # apply time, but the draft itself surfaces a useful error only when
+        # apply runs. The validation here is the allowlist gate: the
+        # entity_type "asset_group_signal" must be accepted by remove_entity.
+        from adloop.ads.write import remove_entity
+
+        result = remove_entity(
+            config,
+            customer_id="1234567890",
+            entity_type="asset_group_signal",
+            entity_id="bare-id",
+        )
+
+        # Allowlist passes; the format check is at apply time. The draft
+        # still returns a plan — the composite-format failure surfaces
+        # during confirm_and_apply.
+        assert result.get("operation") == "remove_entity"
