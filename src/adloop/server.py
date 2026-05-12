@@ -1087,6 +1087,45 @@ def draft_asset_group_assets(
 
 @mcp.tool(annotations=_WRITE)
 @_safe
+def draft_image_asset(
+    images: list[dict],
+    customer_id: str = "",
+) -> dict:
+    """Draft uploading one or more local image files as Google Ads Assets — returns PREVIEW.
+
+    PMax campaigns require pre-uploaded MARKETING_IMAGE, SQUARE_MARKETING_IMAGE,
+    and LOGO assets that are referenced by resource_name. This tool reads
+    local JPG / PNG / GIF files, validates them, and produces a ChangePlan that
+    uploads bytes via AssetService.MutateAssets when confirm_and_apply is
+    called. On apply, returns the new Asset resource_names so they can be
+    passed to draft_pmax_campaign / draft_asset_group / draft_asset_group_assets.
+
+    The same uploaded Asset can be linked as MARKETING_IMAGE (1.91:1, min
+    600x314), SQUARE_MARKETING_IMAGE (1:1, min 300x300), or LOGO (1:1, min
+    128x128) — Google checks the pixel dimensions against the slot at link
+    time.
+
+    Accepted formats: JPG (.jpg/.jpeg), PNG (.png), static GIF (.gif).
+    Max file size: 5 MB per image. File bytes are read at apply time; the file
+    must still exist when confirm_and_apply runs.
+
+    images: list of dicts, each with:
+        - file_path (str, REQUIRED): absolute path to a local image file
+        - name (str, REQUIRED): the Asset display name in Google Ads
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.pmax_write import draft_image_asset as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        images=images,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
 def draft_asset_group_signal(
     asset_group_id: str,
     customer_id: str = "",

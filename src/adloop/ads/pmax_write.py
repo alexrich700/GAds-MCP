@@ -20,6 +20,7 @@ table via ``PMAX_OPERATIONS``.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -36,6 +37,20 @@ _LIMITS = {
     "LONG_HEADLINE": 90,
     "DESCRIPTION": 90,
     "BUSINESS_NAME": 25,
+}
+
+# Image upload constraints (Google Ads ImageAsset).
+_IMAGE_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+_IMAGE_EXT_TO_MIME = {
+    ".jpg": "IMAGE_JPEG",
+    ".jpeg": "IMAGE_JPEG",
+    ".png": "IMAGE_PNG",
+    ".gif": "IMAGE_GIF",
+}
+_IMAGE_MAGIC_BYTES = {
+    "IMAGE_JPEG": (b"\xff\xd8\xff",),
+    "IMAGE_PNG": (b"\x89PNG\r\n\x1a\n",),
+    "IMAGE_GIF": (b"GIF87a", b"GIF89a"),
 }
 
 # Per-field-type minimums for non-retail PMax asset groups (Google's minimums).
@@ -126,9 +141,10 @@ def draft_pmax_campaign(
         - ``audience_resource_names`` (list[str], optional): resource_names of
           existing Audience resources to use as audience signals.
 
-    NOTE: image and logo Assets cannot be created inline through this tool —
-    binary upload is out of scope. Pre-upload via Google Ads UI or a separate
-    AssetService.MutateAssets call, then pass the resource_name strings.
+    NOTE: image and logo Assets are not inline-creatable inside this mutate.
+    Upload them first via ``draft_image_asset`` (point at local JPG/PNG/GIF
+    paths), then pass the returned resource_names here. Resource_names from
+    assets you've already uploaded via the Google Ads UI work too.
     """
     from adloop.safety.guards import (
         SafetyViolation,
@@ -249,8 +265,9 @@ def draft_asset_group_assets(
     by resource_name reference) and linked to the asset group via
     AssetGroupAsset operations in one bulk mutate.
 
-    Image and logo Assets cannot be created inline (binary upload). Pre-upload
-    them and pass resource_name strings.
+    Image and logo Assets are not inline-creatable. Upload local files first
+    via ``draft_image_asset`` and pass the resulting resource_names here, or
+    paste resource_names of assets already uploaded via the Google Ads UI.
     """
     from adloop.safety.guards import SafetyViolation, check_blocked_operation
     from adloop.safety.preview import ChangePlan, store_plan
@@ -286,7 +303,8 @@ def draft_asset_group_assets(
             if not rn or not rn.startswith("customers/"):
                 errors.append(
                     f"{ftype} entries must be Asset resource_names "
-                    f"like 'customers/123/assets/456' — got '{rn}'"
+                    f"like 'customers/123/assets/456' — got '{rn}'. Upload "
+                    f"local files via draft_image_asset to obtain resource_names."
                 )
 
     new_video_ids = list(youtube_video_ids or [])
@@ -314,6 +332,82 @@ def draft_asset_group_assets(
             "resource_assets_by_type": new_resource_assets,
             "youtube_video_ids": new_video_ids,
         },
+    )
+    store_plan(plan)
+    return plan.to_preview()
+
+
+def draft_image_asset(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    images: list[dict] | None = None,
+) -> dict:
+    """Draft uploading one or more local image files as Google Ads Assets.
+
+    PMax campaigns require pre-uploaded MARKETING_IMAGE, SQUARE_MARKETING_IMAGE,
+    and LOGO assets that are referenced by resource_name. This tool reads local
+    image files, validates extension / file size / magic bytes, and produces a
+    ChangePlan that uploads the bytes via ``AssetService.MutateAssets`` when
+    ``confirm_and_apply`` is called. On apply, returns the new Asset
+    resource_names so they can be passed to ``draft_pmax_campaign``,
+    ``draft_asset_group``, or ``draft_asset_group_assets``.
+
+    The same uploaded Asset can be linked as MARKETING_IMAGE,
+    SQUARE_MARKETING_IMAGE, or LOGO at link time — Google checks the pixel
+    dimensions against the slot's aspect-ratio requirement when the
+    AssetGroupAsset link is created (MARKETING_IMAGE: 1.91:1, min 600x314;
+    SQUARE_MARKETING_IMAGE: 1:1, min 300x300; LOGO: 1:1, min 128x128).
+
+    Accepted formats: JPG (.jpg/.jpeg), PNG (.png), static GIF (.gif).
+    Max file size: 5 MB per image. Bytes are read once at apply time, so the
+    file must still exist at its path when confirm_and_apply runs.
+
+    images: list of dicts, each with:
+        - ``file_path`` (str, REQUIRED): absolute path to a local image file
+        - ``name`` (str, REQUIRED): the Asset display name in Google Ads
+
+    Example: ``images=[{"file_path": "/abs/logo.png", "name": "Acme Logo"}]``
+    """
+    from adloop.safety.guards import SafetyViolation, check_blocked_operation
+    from adloop.safety.preview import ChangePlan, store_plan
+
+    try:
+        check_blocked_operation("upload_image_asset", config.safety)
+    except SafetyViolation as e:
+        return {"error": str(e)}
+
+    errors: list[str] = []
+    if not images:
+        errors.append(
+            "images is required — pass a list of "
+            "{file_path, name} dicts."
+        )
+        return {"error": "Validation failed", "details": errors}
+
+    validated: list[dict] = []
+    for i, spec in enumerate(images, start=1):
+        if not isinstance(spec, dict):
+            errors.append(f"images[{i}] must be a dict with file_path and name")
+            continue
+
+        file_path = str(spec.get("file_path") or "").strip()
+        name = str(spec.get("name") or "").strip()
+
+        item_errors, item_meta = _validate_image_file(file_path, name, i)
+        if item_errors:
+            errors.extend(item_errors)
+            continue
+        validated.append(item_meta)
+
+    if errors:
+        return {"error": "Validation failed", "details": errors}
+
+    plan = ChangePlan(
+        operation="upload_image_asset",
+        entity_type="asset",
+        customer_id=customer_id,
+        changes={"images": validated},
     )
     store_plan(plan)
     return plan.to_preview()
@@ -497,15 +591,16 @@ def _validate_asset_group(asset_group: dict) -> list[str]:
             if not isinstance(rn, str) or not rn.startswith("customers/"):
                 errors.append(
                     f"{ftype.lower()}_assets entries must be Asset resource_names "
-                    f"like 'customers/123/assets/456' — got '{rn}'"
+                    f"like 'customers/123/assets/456' — got '{rn}'. Upload local "
+                    f"files via draft_image_asset to obtain resource_names."
                 )
         minimum = ASSET_MINIMUMS.get(ftype, 0)
         if len(items) < minimum:
             errors.append(
                 f"asset_group requires at least {minimum} pre-uploaded "
-                f"{ftype} asset resource_name(s) — pre-upload images via the "
-                f"Google Ads UI or AssetService.MutateAssets, then pass the "
-                f"resource_names. Got {len(items)}."
+                f"{ftype} asset resource_name(s) — call draft_image_asset to "
+                f"upload local files, or paste resource_names of assets already "
+                f"in the account. Got {len(items)}."
             )
         maximum = ASSET_MAXIMUMS.get(ftype, 999)
         if len(items) > maximum:
@@ -529,6 +624,70 @@ def _validate_asset_text(field_type: str, text: str, index: int) -> list[str]:
             f"{field_type} #{index} exceeds {limit} chars ({len(text)}): '{text}'"
         )
     return errors
+
+
+def _validate_image_file(
+    file_path: str, name: str, index: int
+) -> tuple[list[str], dict]:
+    """Validate a local image file path for upload.
+
+    Returns (errors, metadata). Metadata is empty when errors are present.
+    Validates path exists, extension is JPG/PNG/GIF, file size is within
+    Google Ads's 5 MB limit, and the magic bytes match the declared format.
+    """
+    errors: list[str] = []
+    if not file_path:
+        errors.append(f"images[{index}].file_path is required")
+    if not name:
+        errors.append(f"images[{index}].name is required")
+    if errors:
+        return errors, {}
+
+    if not os.path.isabs(file_path):
+        errors.append(
+            f"images[{index}].file_path must be an absolute path, got '{file_path}'"
+        )
+        return errors, {}
+
+    if not os.path.isfile(file_path):
+        errors.append(f"images[{index}].file_path does not exist: '{file_path}'")
+        return errors, {}
+
+    ext = os.path.splitext(file_path)[1].lower()
+    mime_type = _IMAGE_EXT_TO_MIME.get(ext)
+    if mime_type is None:
+        errors.append(
+            f"images[{index}].file_path has unsupported extension '{ext}' — "
+            f"Google Ads accepts {sorted(_IMAGE_EXT_TO_MIME)}"
+        )
+        return errors, {}
+
+    file_size = os.path.getsize(file_path)
+    if file_size == 0:
+        errors.append(f"images[{index}].file_path is empty: '{file_path}'")
+        return errors, {}
+    if file_size > _IMAGE_MAX_BYTES:
+        errors.append(
+            f"images[{index}].file_path is {file_size / 1024 / 1024:.2f} MB — "
+            f"Google Ads max is 5 MB"
+        )
+        return errors, {}
+
+    with open(file_path, "rb") as f:
+        head = f.read(16)
+    if not any(head.startswith(sig) for sig in _IMAGE_MAGIC_BYTES[mime_type]):
+        errors.append(
+            f"images[{index}].file_path extension '{ext}' does not match the "
+            f"actual file content — magic bytes mismatch"
+        )
+        return errors, {}
+
+    return [], {
+        "file_path": file_path,
+        "name": name,
+        "mime_type": mime_type,
+        "file_size": file_size,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -827,6 +986,71 @@ def _apply_create_asset_group_assets(
     return results
 
 
+def _apply_upload_image_asset(
+    client: object,
+    cid: str,
+    changes: dict,
+    *,
+    validate_only: bool = False,
+) -> dict:
+    """Upload one or more local image files as Google Ads Assets.
+
+    File bytes are read at apply time (not at draft time) so that large
+    images do not bloat the in-memory plan. If a file was modified or moved
+    between draft and apply, the apply fails with a clear error before any
+    Google Ads mutate runs.
+    """
+    service = client.get_service("AssetService")
+    mime_type_enum = client.enums.MimeTypeEnum
+
+    operations: list = []
+    image_names: list[str] = []
+    for spec in changes.get("images") or []:
+        path = spec["file_path"]
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"Image '{spec['name']}' is no longer at '{path}'. The file was "
+                f"removed or moved between draft and confirm_and_apply. Re-draft "
+                f"with the current path."
+            )
+        size_now = os.path.getsize(path)
+        if size_now != spec["file_size"]:
+            raise ValueError(
+                f"Image '{spec['name']}' at '{path}' changed size between draft "
+                f"({spec['file_size']} bytes) and confirm_and_apply ({size_now} "
+                f"bytes). Re-draft to upload the current bytes."
+            )
+        with open(path, "rb") as f:
+            data = f.read()
+
+        op = client.get_type("AssetOperation")
+        asset = op.create
+        asset.name = spec["name"]
+        asset.type_ = client.enums.AssetTypeEnum.IMAGE
+        asset.image_asset.data = data
+        asset.image_asset.file_size = size_now
+        asset.image_asset.mime_type = getattr(mime_type_enum, spec["mime_type"])
+        operations.append(op)
+        image_names.append(spec["name"])
+
+    response = service.mutate_assets(
+        request={
+            "customer_id": cid,
+            "operations": operations,
+            "validate_only": validate_only,
+        }
+    )
+
+    if validate_only:
+        return {"status": "validated", "image_count": len(operations)}
+
+    uploaded = [
+        {"name": image_names[i], "resource_name": r.resource_name}
+        for i, r in enumerate(response.results)
+    ]
+    return {"uploaded": uploaded, "image_count": len(uploaded)}
+
+
 def _apply_create_asset_group_signal(
     client: object,
     cid: str,
@@ -998,4 +1222,5 @@ PMAX_OPERATIONS = {
     "create_asset_group": _apply_create_asset_group,
     "create_asset_group_assets": _apply_create_asset_group_assets,
     "create_asset_group_signal": _apply_create_asset_group_signal,
+    "upload_image_asset": _apply_upload_image_asset,
 }

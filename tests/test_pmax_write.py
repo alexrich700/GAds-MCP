@@ -8,13 +8,22 @@ validate_only=True.
 import pytest
 
 from adloop.ads.pmax_write import (
+    PMAX_OPERATIONS,
     draft_asset_group,
     draft_asset_group_assets,
     draft_asset_group_signal,
+    draft_image_asset,
     draft_pmax_campaign,
 )
 from adloop.ads.write import draft_campaign
 from adloop.config import AdLoopConfig, AdsConfig, GA4Config, SafetyConfig
+
+# Minimal valid PNG (1x1, transparent). Used in upload validation tests.
+_TINY_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xfa\xcf"
+    b"\x00\x00\x00\x02\x00\x01\xe5'\xde\xfc\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 @pytest.fixture
@@ -421,3 +430,136 @@ class TestDraftAssetGroupSignal:
         )
 
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# draft_image_asset
+# ---------------------------------------------------------------------------
+
+
+class TestDraftImageAsset:
+    def test_accepts_valid_png(self, config, tmp_path):
+        png_path = tmp_path / "logo.png"
+        png_path.write_bytes(_TINY_PNG_BYTES)
+
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(png_path), "name": "Acme Logo"}],
+        )
+
+        assert "error" not in result
+        assert result["operation"] == "upload_image_asset"
+        assert result["plan_id"]
+        # The validated metadata is what _apply_upload_image_asset reads.
+        images = result["changes"]["images"]
+        assert len(images) == 1
+        assert images[0]["name"] == "Acme Logo"
+        assert images[0]["mime_type"] == "IMAGE_PNG"
+        assert images[0]["file_size"] == len(_TINY_PNG_BYTES)
+
+    def test_accepts_batch(self, config, tmp_path):
+        a = tmp_path / "a.png"
+        b = tmp_path / "b.png"
+        a.write_bytes(_TINY_PNG_BYTES)
+        b.write_bytes(_TINY_PNG_BYTES)
+
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[
+                {"file_path": str(a), "name": "Image A"},
+                {"file_path": str(b), "name": "Image B"},
+            ],
+        )
+
+        assert "error" not in result
+        assert len(result["changes"]["images"]) == 2
+
+    def test_requires_images_list(self, config):
+        result = draft_image_asset(config, customer_id="1234567890", images=[])
+        assert "error" in result
+        assert any("images" in d for d in result["details"])
+
+    def test_rejects_missing_file_path(self, config):
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"name": "no path"}],
+        )
+        assert "error" in result
+        assert any("file_path" in d for d in result["details"])
+
+    def test_rejects_missing_name(self, config, tmp_path):
+        png_path = tmp_path / "logo.png"
+        png_path.write_bytes(_TINY_PNG_BYTES)
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(png_path)}],
+        )
+        assert "error" in result
+        assert any("name" in d for d in result["details"])
+
+    def test_rejects_relative_path(self, config):
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": "rel/path.png", "name": "x"}],
+        )
+        assert "error" in result
+        assert any("absolute" in d for d in result["details"])
+
+    def test_rejects_nonexistent_file(self, config, tmp_path):
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[
+                {"file_path": str(tmp_path / "nope.png"), "name": "x"},
+            ],
+        )
+        assert "error" in result
+        assert any("does not exist" in d for d in result["details"])
+
+    def test_rejects_unsupported_extension(self, config, tmp_path):
+        webp = tmp_path / "bad.webp"
+        webp.write_bytes(b"\x00" * 100)
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(webp), "name": "x"}],
+        )
+        assert "error" in result
+        assert any("unsupported extension" in d for d in result["details"])
+
+    def test_rejects_extension_content_mismatch(self, config, tmp_path):
+        # File claims .png but bytes are not a PNG.
+        fake = tmp_path / "fake.png"
+        fake.write_bytes(b"this is plain text, not an image")
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(fake), "name": "x"}],
+        )
+        assert "error" in result
+        assert any("magic bytes" in d for d in result["details"])
+
+    def test_rejects_oversized_file(self, config, tmp_path, monkeypatch):
+        # Patch the cap so we don't have to materialise a 5 MB file.
+        from adloop.ads import pmax_write
+
+        monkeypatch.setattr(pmax_write, "_IMAGE_MAX_BYTES", 64)
+        png_path = tmp_path / "logo.png"
+        png_path.write_bytes(_TINY_PNG_BYTES)  # 67 bytes > 64-byte test cap
+
+        result = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(png_path), "name": "Too big"}],
+        )
+        assert "error" in result
+        assert any("5 MB" in d for d in result["details"])
+
+    def test_dispatch_table_registers_upload(self):
+        # confirm_and_apply finds the handler via PMAX_OPERATIONS.
+        assert "upload_image_asset" in PMAX_OPERATIONS
