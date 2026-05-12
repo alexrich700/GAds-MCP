@@ -905,16 +905,32 @@ def confirm_and_apply(
                 result="dry_run_validation_failed",
                 error=str(e),
             )
+            # Distinguish a Google Ads API rejection (request reached the API
+            # and was rejected) from an internal Python error before any
+            # network round-trip (TypeError, AttributeError, etc.).
+            is_api_rejection = type(e).__name__ == "GoogleAdsException" or hasattr(
+                e, "failure"
+            )
+            if is_api_rejection:
+                message = (
+                    "Google Ads rejected the plan during validate_only — "
+                    "applying with dry_run=false would fail with the same error. "
+                    "Fix the plan inputs and re-draft."
+                )
+            else:
+                message = (
+                    "The validate_only call failed before reaching Google Ads "
+                    "(internal error in the apply pipeline, not an API "
+                    "rejection). The plan inputs may be fine — this is "
+                    "usually a bug in the MCP server. See 'error' for the "
+                    "exception."
+                )
             return {
                 "status": "DRY_RUN_VALIDATION_FAILED",
                 "plan_id": plan.plan_id,
                 "operation": plan.operation,
                 "error": str(e),
-                "message": (
-                    "Google Ads rejected the plan during validate_only — "
-                    "applying with dry_run=false would fail with the same error. "
-                    "Fix the plan inputs and re-draft."
-                ),
+                "message": message,
             }
 
         log_mutation(
@@ -1584,7 +1600,11 @@ def _apply_create_campaign(
         operations.append(lang_op)
 
     response = service.mutate(
-        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "mutate_operations": operations,
+            "validate_only": validate_only,
+        }
     )
 
     if validate_only:
@@ -1654,7 +1674,11 @@ def _apply_create_ad_group(
         operations.append(kw_op)
 
     response = service.mutate(
-        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "mutate_operations": operations,
+            "validate_only": validate_only,
+        }
     )
 
     if validate_only:
@@ -1822,7 +1846,11 @@ def _apply_update_campaign(
         return {"message": "No changes to apply"}
 
     response = service.mutate(
-        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "mutate_operations": operations,
+            "validate_only": validate_only,
+        }
     )
 
     if validate_only:
@@ -1890,7 +1918,11 @@ def _apply_create_rsa(
         ad.responsive_search_ad.path2 = changes["path2"]
 
     response = service.mutate_ad_group_ads(
-        customer_id=cid, operations=[operation], validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "operations": [operation],
+            "validate_only": validate_only,
+        }
     )
     if validate_only:
         return {"status": "validated"}
@@ -1982,7 +2014,11 @@ def _apply_add_keywords(
         operations.append(operation)
 
     response = service.mutate_ad_group_criteria(
-        customer_id=cid, operations=operations, validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "operations": operations,
+            "validate_only": validate_only,
+        }
     )
     if validate_only:
         return {"status": "validated", "operation_count": len(operations)}
@@ -2014,7 +2050,11 @@ def _apply_add_negative_keywords(
         operations.append(operation)
 
     response = service.mutate_campaign_criteria(
-        customer_id=cid, operations=operations, validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "operations": operations,
+            "validate_only": validate_only,
+        }
     )
     if validate_only:
         return {"status": "validated", "operation_count": len(operations)}
@@ -2061,7 +2101,11 @@ def _apply_remove(
         operation = client.get_type("CampaignOperation")
         operation.remove = service.campaign_path(cid, entity_id)
         response = service.mutate_campaigns(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "ad_group":
@@ -2069,7 +2113,11 @@ def _apply_remove(
         operation = client.get_type("AdGroupOperation")
         operation.remove = service.ad_group_path(cid, entity_id)
         response = service.mutate_ad_groups(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "ad":
@@ -2078,7 +2126,11 @@ def _apply_remove(
         operation = client.get_type("AdGroupAdOperation")
         operation.remove = f"customers/{cid}/adGroupAds/{resolved_id}"
         response = service.mutate_ad_group_ads(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "keyword":
@@ -2086,7 +2138,11 @@ def _apply_remove(
         operation = client.get_type("AdGroupCriterionOperation")
         operation.remove = f"customers/{cid}/adGroupCriteria/{entity_id}"
         response = service.mutate_ad_group_criteria(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "negative_keyword":
@@ -2094,7 +2150,11 @@ def _apply_remove(
         operation = client.get_type("CampaignCriterionOperation")
         operation.remove = f"customers/{cid}/campaignCriteria/{entity_id}"
         response = service.mutate_campaign_criteria(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "asset_group":
@@ -2102,7 +2162,11 @@ def _apply_remove(
         operation = client.get_type("AssetGroupOperation")
         operation.remove = service.asset_group_path(cid, entity_id)
         response = service.mutate_asset_groups(
-            customer_id=cid, operations=[operation], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "operations": [operation],
+                "validate_only": validate_only,
+            }
         )
 
     elif entity_type == "label":
@@ -2128,7 +2192,11 @@ def _apply_remove(
         op = client.get_type("MutateOperation")
         op.campaign_asset_operation.remove = resource_name
         response = ga_service.mutate(
-            customer_id=cid, mutate_operations=[op], validate_only=validate_only
+            request={
+                "customer_id": cid,
+                "mutate_operations": [op],
+                "validate_only": validate_only,
+            }
         )
         if validate_only:
             return {"status": "validated"}
@@ -2207,7 +2275,11 @@ def _apply_status_change(
     operation.update_mask = field_mask_pb2.FieldMask(paths=["status"])
 
     response = mutate(
-        customer_id=cid, operations=[operation], validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "operations": [operation],
+            "validate_only": validate_only,
+        }
     )
     if validate_only:
         return {"status": "validated"}
@@ -2253,7 +2325,11 @@ def _apply_create_sitelinks(
         operations.append(op)
 
     response = googleads_service.mutate(
-        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "mutate_operations": operations,
+            "validate_only": validate_only,
+        }
     )
 
     if validate_only:

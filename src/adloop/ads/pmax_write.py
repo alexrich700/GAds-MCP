@@ -643,7 +643,11 @@ def _apply_create_pmax_campaign(
     )
 
     response = service.mutate(
-        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "mutate_operations": operations,
+            "validate_only": validate_only,
+        }
     )
 
     if validate_only:
@@ -702,7 +706,11 @@ def _apply_create_asset_group(
     )
 
     response = service.mutate(
-        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "mutate_operations": operations,
+            "validate_only": validate_only,
+        }
     )
 
     if validate_only:
@@ -794,7 +802,11 @@ def _apply_create_asset_group_assets(
         operations.append(op)
 
     response = service.mutate(
-        customer_id=cid, mutate_operations=operations, validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "mutate_operations": operations,
+            "validate_only": validate_only,
+        }
     )
 
     if validate_only:
@@ -838,7 +850,11 @@ def _apply_create_asset_group_signal(
         signal.audience.audience = changes["audience_resource_name"]
 
     response = service.mutate_asset_group_signals(
-        customer_id=cid, operations=[operation], validate_only=validate_only
+        request={
+            "customer_id": cid,
+            "operations": [operation],
+            "validate_only": validate_only,
+        }
     )
     if validate_only:
         return {"status": "validated"}
