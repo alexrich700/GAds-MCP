@@ -20,6 +20,7 @@ table via ``PMAX_OPERATIONS``.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import TYPE_CHECKING
 
@@ -684,19 +685,24 @@ def _validate_image_file(
         return errors, {}
 
     with open(file_path, "rb") as f:
-        head = f.read(16)
-    if not any(head.startswith(sig) for sig in _IMAGE_MAGIC_BYTES[mime_type]):
+        data = f.read()
+    if not any(data.startswith(sig) for sig in _IMAGE_MAGIC_BYTES[mime_type]):
         errors.append(
             f"images[{index}].file_path extension '{ext}' does not match the "
             f"actual file content — magic bytes mismatch"
         )
         return errors, {}
 
+    # Hash so we can detect content-substitution between draft and apply
+    # (same byte count, different bytes — file_size alone would miss it).
+    sha256 = hashlib.sha256(data).hexdigest()
+
     return [], {
         "file_path": file_path,
         "name": name,
         "mime_type": mime_type,
         "file_size": file_size,
+        "sha256": sha256,
     }
 
 
@@ -1034,6 +1040,40 @@ def _apply_create_asset_group_assets(
     return results
 
 
+def _read_image_unchanged(spec: dict) -> bytes:
+    """Re-read an image at apply time, verifying it has not changed since draft.
+
+    Raises FileNotFoundError if the file was moved, or ValueError if the bytes
+    were modified (size or sha256 mismatch). Returns the file bytes so the
+    caller can hand them straight to AssetService.MutateAssets.
+    """
+    path = spec["file_path"]
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"Image '{spec['name']}' is no longer at '{path}'. The file was "
+            f"removed or moved between draft and confirm_and_apply. Re-draft "
+            f"with the current path."
+        )
+    size_now = os.path.getsize(path)
+    if size_now != spec["file_size"]:
+        raise ValueError(
+            f"Image '{spec['name']}' at '{path}' changed size between draft "
+            f"({spec['file_size']} bytes) and confirm_and_apply ({size_now} "
+            f"bytes). Re-draft to upload the current bytes."
+        )
+    with open(path, "rb") as f:
+        data = f.read()
+    sha_now = hashlib.sha256(data).hexdigest()
+    if sha_now != spec["sha256"]:
+        raise ValueError(
+            f"Image '{spec['name']}' at '{path}' changed content between "
+            f"draft and confirm_and_apply (sha256 mismatch — same byte "
+            f"count, different bytes). Re-draft to upload the current "
+            f"bytes."
+        )
+    return data
+
+
 def _apply_upload_image_asset(
     client: object,
     cid: str,
@@ -1048,28 +1088,18 @@ def _apply_upload_image_asset(
     between draft and apply, the apply fails with a clear error before any
     Google Ads mutate runs.
     """
+    image_specs = changes.get("images") or []
+    # Verify every image before reaching the API so a partial mutate cannot
+    # leave half of a batch uploaded.
+    verified = [(spec, _read_image_unchanged(spec)) for spec in image_specs]
+
     service = client.get_service("AssetService")
     mime_type_enum = client.enums.MimeTypeEnum
 
     operations: list = []
     image_names: list[str] = []
-    for spec in changes.get("images") or []:
-        path = spec["file_path"]
-        if not os.path.isfile(path):
-            raise FileNotFoundError(
-                f"Image '{spec['name']}' is no longer at '{path}'. The file was "
-                f"removed or moved between draft and confirm_and_apply. Re-draft "
-                f"with the current path."
-            )
-        size_now = os.path.getsize(path)
-        if size_now != spec["file_size"]:
-            raise ValueError(
-                f"Image '{spec['name']}' at '{path}' changed size between draft "
-                f"({spec['file_size']} bytes) and confirm_and_apply ({size_now} "
-                f"bytes). Re-draft to upload the current bytes."
-            )
-        with open(path, "rb") as f:
-            data = f.read()
+    for spec, data in verified:
+        size_now = len(data)
 
         op = client.get_type("AssetOperation")
         asset = op.create

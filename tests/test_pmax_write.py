@@ -489,6 +489,34 @@ class TestDraftImageAsset:
         assert images[0]["name"] == "Acme Logo"
         assert images[0]["mime_type"] == "IMAGE_PNG"
         assert images[0]["file_size"] == len(_TINY_PNG_BYTES)
+        assert len(images[0]["sha256"]) == 64  # SHA-256 hex digest
+
+    def test_apply_rejects_same_size_content_swap(self, config, tmp_path):
+        # Codex review: validate against same-size content substitution
+        # between draft and confirm_and_apply.
+        from adloop.ads.pmax_write import _apply_upload_image_asset
+
+        png_path = tmp_path / "logo.png"
+        png_path.write_bytes(_TINY_PNG_BYTES)
+        plan = draft_image_asset(
+            config,
+            customer_id="1234567890",
+            images=[{"file_path": str(png_path), "name": "Acme Logo"}],
+        )
+        assert "error" not in plan
+
+        # Replace bytes in-place with a same-size GIF payload — bypasses the
+        # file_size check, but the hash differs.
+        same_size_swap = b"GIF89a" + b"X" * (len(_TINY_PNG_BYTES) - 6)
+        assert len(same_size_swap) == len(_TINY_PNG_BYTES)
+        png_path.write_bytes(same_size_swap)
+
+        with pytest.raises(ValueError, match="sha256 mismatch"):
+            _apply_upload_image_asset(
+                client=object(),
+                cid="1234567890",
+                changes=plan["changes"],
+            )
 
     def test_accepts_batch(self, config, tmp_path):
         a = tmp_path / "a.png"
