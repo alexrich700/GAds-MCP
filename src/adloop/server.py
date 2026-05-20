@@ -1089,6 +1089,30 @@ def add_negative_keywords(
 
 @mcp.tool(annotations=_WRITE)
 @_safe
+def add_negative_locations(
+    campaign_id: str,
+    geo_target_ids: _StrList,
+    customer_id: str = "",
+) -> dict:
+    """Draft negative geo location additions — returns a PREVIEW.
+
+    Use this to exclude cities/regions from a campaign while keeping broader
+    positive targets such as State of Sao Paulo. geo_target_ids are numeric
+    Google geo target constant IDs. Call confirm_and_apply with the returned
+    plan_id to execute.
+    """
+    from adloop.ads.write import add_negative_locations as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        campaign_id=campaign_id,
+        geo_target_ids=geo_target_ids,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
 def propose_negative_keyword_list(
     campaign_id: str,
     list_name: str,

@@ -389,6 +389,49 @@ def add_negative_keywords(
     return plan.to_preview()
 
 
+def add_negative_locations(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    campaign_id: str = "",
+    geo_target_ids: list[str] | None = None,
+) -> dict:
+    """Draft negative geo location additions — returns preview."""
+    from adloop.safety.guards import SafetyViolation, check_blocked_operation
+    from adloop.safety.preview import ChangePlan, store_plan
+
+    try:
+        check_blocked_operation("add_negative_locations", config.safety)
+    except SafetyViolation as e:
+        return {"error": str(e)}
+
+    geo_target_ids = [str(g).strip() for g in (geo_target_ids or []) if str(g).strip()]
+
+    errors = []
+    if not campaign_id:
+        errors.append("campaign_id is required")
+    if not geo_target_ids:
+        errors.append("At least one geo_target_id is required")
+    if any(not geo_id.isdigit() for geo_id in geo_target_ids):
+        errors.append("geo_target_ids must be numeric Google geo target constant IDs")
+    if errors:
+        return {"error": "Validation failed", "details": errors}
+
+    deduped_geo_ids = list(dict.fromkeys(geo_target_ids))
+    plan = ChangePlan(
+        operation="add_negative_locations",
+        entity_type="negative_location",
+        entity_id=campaign_id,
+        customer_id=customer_id,
+        changes={
+            "campaign_id": campaign_id,
+            "geo_target_ids": deduped_geo_ids,
+        },
+    )
+    store_plan(plan)
+    return plan.to_preview()
+
+
 def propose_negative_keyword_list(
     config: AdLoopConfig,
     *,
@@ -2144,6 +2187,7 @@ def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
         "create_responsive_search_ad": _apply_create_rsa,
         "add_keywords": _apply_add_keywords,
         "add_negative_keywords": _apply_add_negative_keywords,
+        "add_negative_locations": _apply_add_negative_locations,
         "create_negative_keyword_list": _apply_create_negative_keyword_list,
         "add_to_negative_keyword_list": _apply_add_to_negative_keyword_list,
         "attach_shared_set_to_campaigns": _apply_attach_shared_set_to_campaigns,
@@ -2639,6 +2683,27 @@ def _apply_add_negative_keywords(client: object, cid: str, changes: dict) -> dic
         criterion.keyword.match_type = getattr(
             client.enums.KeywordMatchTypeEnum, changes["match_type"]
         )
+        operations.append(operation)
+
+    response = service.mutate_campaign_criteria(
+        customer_id=cid, operations=operations
+    )
+    return {"resource_names": [r.resource_name for r in response.results]}
+
+
+def _apply_add_negative_locations(client: object, cid: str, changes: dict) -> dict:
+    service = client.get_service("CampaignCriterionService")
+    campaign_path = client.get_service("CampaignService").campaign_path(
+        cid, changes["campaign_id"]
+    )
+
+    operations = []
+    for geo_id in changes["geo_target_ids"]:
+        operation = client.get_type("CampaignCriterionOperation")
+        criterion = operation.create
+        criterion.campaign = campaign_path
+        criterion.negative = True
+        criterion.location.geo_target_constant = f"geoTargetConstants/{geo_id}"
         operations.append(operation)
 
     response = service.mutate_campaign_criteria(
