@@ -1384,6 +1384,33 @@ class TestDraftDemographicTargeting:
         assert any("narrows" in w.lower() for w in result["warnings"])
 
 
+def test_draft_demographic_targeting_accepts_json_string_list(config):
+    """The MCP server's _StrListOpt validator must coerce JSON-encoded list strings.
+
+    Some MCP clients/harnesses pre-serialize list params as JSON strings.
+    The BeforeValidator decodes them back to a list before Pydantic checks
+    the type, so the tool keeps working without client-side workarounds.
+    """
+    import asyncio
+    import json
+    from adloop.server import mcp
+
+    async def run():
+        tool = await mcp.get_tool("draft_demographic_targeting")
+        return await tool.run({
+            "customer_id": "123-456-7890",
+            "ad_group_id": "2002",
+            # JSON-encoded list — what a misbehaving client might send.
+            "age_ranges": json.dumps(["25-34", "35-44"]),
+        })
+
+    result = asyncio.run(run())
+    # ToolResult exposes structured_content for tools that return a dict.
+    payload = result.structured_content
+    assert payload["operation"] == "add_demographic_criteria"
+    assert payload["changes"]["age_ranges"] == ["AGE_RANGE_25_34", "AGE_RANGE_35_44"]
+
+
 class _FakeAdGroupCriterionService:
     def __init__(self):
         self.operations = None

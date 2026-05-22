@@ -1244,10 +1244,10 @@ def draft_demographic_targeting(
     customer_id: str = "",
     ad_group_id: str = "",
     campaign_id: str = "",
-    age_ranges: list[str] | None = None,
-    genders: list[str] | None = None,
-    parental_statuses: list[str] | None = None,
-    income_ranges: list[str] | None = None,
+    age_ranges: _StrListOpt = None,
+    genders: _StrListOpt = None,
+    parental_statuses: _StrListOpt = None,
+    income_ranges: _StrListOpt = None,
     negative: bool = True,
 ) -> dict:
     """Draft demographic targeting (age/gender/parental status/income) — returns a PREVIEW.
