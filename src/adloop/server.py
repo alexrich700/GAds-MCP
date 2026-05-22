@@ -1247,10 +1247,14 @@ def draft_demographic_targeting(
     customer_id: str = "",
     ad_group_id: str = "",
     campaign_id: str = "",
-    age_ranges: _StrListOpt = None,
-    genders: _StrListOpt = None,
-    parental_statuses: _StrListOpt = None,
-    income_ranges: _StrListOpt = None,
+    # noqa: B006 — mutable default required for MCP JSON schema. Using
+    # `_StrList = []` produces a flat `{"type": "array", "default": []}`
+    # schema that naive MCP clients handle; `_StrListOpt = None` would
+    # produce an `anyOf: [array, null]` form that some clients ignore.
+    age_ranges: _StrList = [],  # noqa: B006
+    genders: _StrList = [],  # noqa: B006
+    parental_statuses: _StrList = [],  # noqa: B006
+    income_ranges: _StrList = [],  # noqa: B006
     negative: bool = True,
 ) -> dict:
     """Draft demographic targeting (age/gender/parental status/income) — returns a PREVIEW.
