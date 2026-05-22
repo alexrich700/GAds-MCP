@@ -57,6 +57,9 @@ _DictList = Annotated[list[dict], BeforeValidator(_coerce_json_string_to_list)]
 _DictListOpt = Annotated[
     list[dict] | None, BeforeValidator(_coerce_json_string_to_list)
 ]
+_StrOrDictList = Annotated[
+    list[str | dict], BeforeValidator(_coerce_json_string_to_list)
+]
 
 def _build_orchestration_instructions() -> str:
     """Compact orchestration hint sent via MCP ``InitializeResult.instructions``.
@@ -1029,8 +1032,8 @@ def update_campaign(
 @_safe
 def draft_responsive_search_ad(
     ad_group_id: str,
-    headlines: list[str | dict],
-    descriptions: list[str | dict],
+    headlines: _StrOrDictList,
+    descriptions: _StrOrDictList,
     final_url: str,
     customer_id: str = "",
     path1: str = "",

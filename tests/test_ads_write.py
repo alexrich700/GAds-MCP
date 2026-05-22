@@ -1384,6 +1384,61 @@ class TestDraftDemographicTargeting:
         assert any("narrows" in w.lower() for w in result["warnings"])
 
 
+def test_draft_responsive_search_ad_accepts_json_string_list(config, monkeypatch):
+    """Regression: headlines/descriptions accept JSON-encoded list strings.
+
+    Same coercion contract as every other list-accepting MCP tool — covered
+    here because draft_responsive_search_ad uses the mixed-element
+    _StrOrDictList alias rather than _StrList.
+    """
+    import asyncio
+    import json
+    from adloop.server import mcp
+
+    # Bypass URL reachability check so the test doesn't make a network call.
+    monkeypatch.setattr(
+        "adloop.ads.write._validate_urls", lambda urls, timeout=10: {u: None for u in urls}
+    )
+
+    headlines = [
+        "Quality Service Today",
+        "Trusted by Thousands",
+        "Free Quote in 60 Sec",
+    ]
+    descriptions = [
+        "Get a personalized quote in under a minute. No commitment required.",
+        "Top-rated service with a satisfaction guarantee. Try us today.",
+    ]
+
+    async def run():
+        tool = await mcp.get_tool("draft_responsive_search_ad")
+        return await tool.run({
+            "customer_id": "123-456-7890",
+            "ad_group_id": "2002",
+            "headlines": json.dumps(headlines),
+            "descriptions": json.dumps(descriptions),
+            "final_url": "https://example.com/landing",
+        })
+
+    result = asyncio.run(run())
+    payload = result.structured_content
+    # If the coercion failed, we'd hit a Pydantic list_type error and never
+    # reach this point — so a clean preview is the regression check.
+    assert payload["operation"] == "create_responsive_search_ad"
+    stored_headlines = payload["changes"]["headlines"]
+    stored_descriptions = payload["changes"]["descriptions"]
+    assert len(stored_headlines) == len(headlines)
+    assert len(stored_descriptions) == len(descriptions)
+    # Each entry should round-trip the text — internal normalization may wrap
+    # strings as {"text": ..., "pinned_field": None}, which is fine.
+    for original, stored in zip(headlines, stored_headlines):
+        text = stored["text"] if isinstance(stored, dict) else stored
+        assert text == original
+    for original, stored in zip(descriptions, stored_descriptions):
+        text = stored["text"] if isinstance(stored, dict) else stored
+        assert text == original
+
+
 def test_draft_demographic_targeting_accepts_json_string_list(config):
     """The MCP server's _StrListOpt validator must coerce JSON-encoded list strings.
 
