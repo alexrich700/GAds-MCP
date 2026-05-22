@@ -45,6 +45,7 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 | `get_asset_performance` | Per-asset details for PMax — field type, serving status, content. Use with `get_detailed_asset_performance` for quality signals | `campaign_id` (optional) |
 | `get_detailed_asset_performance` | Top-performing asset combinations — which headline+description+image combos Google selects most | `campaign_id` (optional) |
 | `get_audience_performance` | Audience segment metrics — remarketing, in-market, affinity, demographics | `date_range_start`, `date_range_end`, `campaign_id` (optional) |
+| `get_demographic_targeting` | List current demographic criteria (age/gender/parental status/income) on an ad group or campaign — returns each criterion's `remove_id` for use with `remove_entity` | exactly one of `ad_group_id` or `campaign_id` |
 | `run_gaql` | Custom queries not covered by other tools | `query`, `format` (table/json/csv) |
 
 **Return format notes:**
@@ -55,6 +56,7 @@ You have access to AdLoop MCP tools that connect Google Ads and Google Analytics
 - PMax tools: `get_pmax_performance` returns `insights[]` flagging weak ad strength and zero-conversion asset groups. `segments.ad_network_type` includes MIXED — a Google catch-all for most PMax traffic. Full channel splits (Search vs YouTube vs Display vs Discover) are not available via the API.
 - `get_asset_performance` returns `by_status` and `by_field_type` summaries. Note: per-asset performance labels (BEST/GOOD/LOW) are not available for PMax assets in API v23. Use `get_detailed_asset_performance` for quality signals via top combinations.
 - `get_audience_performance` works for campaigns with explicit audience targeting. PMax audience targeting is automatic and may not appear in this report.
+- `get_demographic_targeting` returns an empty list when no demographics have been excluded or narrowed — that is the DEFAULT state (Google serves to all segments). Each criterion includes a composite `remove_id` (`adGroupId~criterionId` or `campaignId~criterionId`) that can be passed straight to `remove_entity`.
 
 ### Cross-Reference Tools (GA4 + Ads combined)
 
@@ -105,9 +107,10 @@ These tools call both APIs internally and return unified results with computed `
 | `add_to_negative_keyword_list` | Append keywords to an EXISTING shared negative keyword list (does NOT add) | `shared_set_id` (from `get_negative_keyword_lists`), keyword list, `match_type` |
 | `attach_shared_set_to_campaigns` | Attach an EXISTING shared set (e.g. shared negative keyword list) to one or more campaigns. Use after creating a campaign to inherit pre-built negatives. | `shared_set_id` (from `get_negative_keyword_lists`), `campaign_ids` list |
 | `detach_shared_set_from_campaigns` | Detach a shared set from one or more campaigns. Removes only the linkage; the shared set and its keywords stay intact. | `shared_set_id`, `campaign_ids` list |
+| `draft_demographic_targeting` | Propose demographic criteria (age, gender, parental status, income range) at ad group or campaign level. Defaults to EXCLUSION (`negative=True`). | exactly one of `ad_group_id` or `campaign_id`, at least one of `age_ranges`/`genders`/`parental_statuses`/`income_ranges`, optional `negative` (default True) |
 | `pause_entity` | Propose pausing campaign/ad group/ad/keyword | `entity_type`, `entity_id` |
 | `enable_entity` | Propose enabling paused entity | `entity_type`, `entity_id` |
-| `remove_entity` | Propose REMOVING an entity (irreversible) | `entity_type` (incl. "negative_keyword", "shared_criterion", "campaign_asset", "asset", "customer_asset"), `entity_id` |
+| `remove_entity` | Propose REMOVING an entity (irreversible) | `entity_type` (incl. "negative_keyword", "shared_criterion", "ad_group_criterion", "campaign_criterion", "campaign_asset", "asset", "customer_asset"), `entity_id` |
 | `confirm_and_apply` | Execute a previously previewed change | `plan_id` from a draft tool, `dry_run` (default true) |
 
 **Write tool workflow:**
@@ -125,7 +128,7 @@ These tools call both APIs internally and return unified results with computed `
 - Ad-group pause/enable is already handled by `pause_entity` / `enable_entity` with `entity_type="ad_group"`; do not invent a separate pause tool.
 - `update_campaign` replaces POSITIVE geo/language targets entirely (not append). Pass the full desired list. NEGATIVE geo exclusions (criteria with `negative=TRUE`) are **preserved** across a positive-geo replacement — they survive the swap. The preview surfaces preserved negative geo IDs in `preserved_negative_geo_target_ids` so the change is auditable. To remove a negative geo exclusion explicitly, use `remove_entity` with `entity_type="campaign_criterion"`.
 - `remove_entity` is IRREVERSIBLE — always prefer `pause_entity` unless the user explicitly wants permanent removal. Removal triggers double confirmation in the safety layer.
-- `remove_entity` supports `entity_type` values: "campaign", "ad_group", "ad", "keyword", "negative_keyword", "shared_criterion", "campaign_asset", "asset", "customer_asset". Use "negative_keyword" to remove campaign-level negative keywords. Use "shared_criterion" to remove a keyword from a shared negative keyword list — the `entity_id` format is "sharedSetId~criterionId" (use the `resource_id` field from `get_negative_keyword_list_keywords`). Use "campaign_asset" to remove sitelinks and other asset links from a campaign. Use "asset" to remove a standalone asset. Use "customer_asset" to remove a customer-level asset link.
+- `remove_entity` supports `entity_type` values: "campaign", "ad_group", "ad", "keyword", "negative_keyword", "shared_criterion", "ad_group_criterion", "campaign_criterion", "campaign_asset", "asset", "customer_asset". Use "negative_keyword" to remove campaign-level negative keywords. Use "shared_criterion" to remove a keyword from a shared negative keyword list — the `entity_id` format is "sharedSetId~criterionId" (use the `resource_id` field from `get_negative_keyword_list_keywords`). Use "ad_group_criterion" or "campaign_criterion" to remove demographic targeting (age/gender/parental/income) — pass the `remove_id` returned by `get_demographic_targeting`. Use "campaign_asset" to remove sitelinks and other asset links from a campaign. Use "asset" to remove a standalone asset. Use "customer_asset" to remove a customer-level asset link.
 - `require_dry_run: true` in config overrides `dry_run=false` — the user must change the config to allow real mutations.
 - All operations (including dry runs) are logged to `~/.adloop/audit.log`.
 
@@ -377,6 +380,28 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 3. Compare audience segment metrics: which segments convert best? Which have high spend but zero conversions?
 4. For PMax campaigns, note that audience targeting is automatic — audience performance data may not appear in the `ad_group_audience_view` report. Audience signals in PMax are configured at the asset group level and serve as hints, not hard targeting.
 5. For Display/Search campaigns with explicit audience overlays, use the data to recommend bid adjustments or audience exclusions
+
+### When user asks to exclude or include demographics ("exclude ages 25-34", "exclude women", "only show to parents")
+
+1. Identify the target scope: usually an ad group, sometimes a campaign. If the user says "in campaign X", target the campaign; if they say "in ad group Y" or "on this ad group", target the ad group. If unclear, ask — demographic exclusions at ad-group level are the more common pattern.
+2. Get the entity ID:
+   - For an ad group: `run_gaql` with `SELECT ad_group.id, ad_group.name FROM ad_group WHERE campaign.id = {campaign_id}` (or filter by name)
+   - For a campaign: `get_campaign_performance`
+3. Call `get_demographic_targeting` first to see what's already excluded — avoid creating duplicate exclusions.
+4. **Map the user's request to Google's fixed buckets:**
+   - **Age**: 18-24, 25-34, 35-44, 45-54, 55-64, 65+. Google does NOT support arbitrary ranges. If the user says "23-35", explain that the closest buckets are 25-34 (covers 25-34 exactly) plus partial overlap with 18-24 (23-24) and 35-44 (35). Ask which buckets to use.
+   - **Gender**: female, male, undetermined
+   - **Parental status**: parent, not_a_parent, undetermined
+   - **Income range**: PERCENTILES (not currency). top-10, 11-20, 21-30, 31-40, 41-50, lower-50. Only works in select countries (US, AU, JP, etc.). Do NOT translate dollar amounts — income range targeting is based on a user's household income percentile in their country.
+5. Call `draft_demographic_targeting` with the appropriate dimension(s). Default is `negative=True` (exclusion). Use `negative=False` only when the user explicitly wants to NARROW targeting to specific demographics — warn them that this excludes everyone else (plus UNDETERMINED).
+6. Present the preview to the user — show clearly which segments will no longer see ads (for exclusions) or will be the only ones who do (for positive targeting).
+7. Wait for explicit user approval before calling `confirm_and_apply`.
+8. **To remove an existing demographic exclusion**, call `get_demographic_targeting` to find the criterion's `remove_id`, then use `remove_entity` with `entity_type="ad_group_criterion"` or `entity_type="campaign_criterion"`.
+
+**Common pitfalls:**
+- "Audiences" and "demographics" mean different things in Google Ads. Audiences are user lists (remarketing, in-market, affinity) — use `get_audience_performance` and audience-targeting tools. Demographics are age/gender/parental/income — use `get_demographic_targeting` and `draft_demographic_targeting`. If the user says "exclude audiences" but describes ages, they mean demographics.
+- Excluding many segments within a single dimension drastically reduces reach. The tool will warn when you exclude nearly all values in one dimension.
+- Demographic exclusions are ad-serving filters, not bid modifiers. To raise or lower bids for a demographic, use bid adjustments (not currently exposed as a dedicated tool — use `run_gaql` and the Google Ads UI).
 
 ## Default Parameters
 

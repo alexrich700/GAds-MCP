@@ -534,6 +534,115 @@ def get_audience_performance(
     return {"audiences": rows, "total_audiences": len(rows), "insights": insights}
 
 
+def get_demographic_targeting(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    ad_group_id: str = "",
+    campaign_id: str = "",
+) -> dict:
+    """List current demographic targeting (AGE_RANGE, GENDER, PARENTAL_STATUS, INCOME_RANGE).
+
+    Provide either `ad_group_id` or `campaign_id`. Returns criteria with their
+    `criterion_id` (needed to remove a criterion), the demographic value, and
+    whether the criterion is negative (excluded) or positive (narrowed targeting).
+
+    By default, Google Ads serves ads to all demographic segments — a criterion
+    only appears here when the user has explicitly added an exclusion or
+    positive targeting refinement.
+    """
+    from adloop.ads.gaql import execute_query
+
+    if not ad_group_id and not campaign_id:
+        return {
+            "error": "Provide either ad_group_id or campaign_id",
+        }
+    if ad_group_id and campaign_id:
+        return {
+            "error": "Provide only one of ad_group_id or campaign_id, not both",
+        }
+
+    demographic_types = (
+        "'AGE_RANGE', 'GENDER', 'PARENTAL_STATUS', 'INCOME_RANGE'"
+    )
+
+    if ad_group_id:
+        query = f"""
+            SELECT ad_group_criterion.criterion_id,
+                   ad_group_criterion.type,
+                   ad_group_criterion.negative,
+                   ad_group_criterion.status,
+                   ad_group_criterion.age_range.type,
+                   ad_group_criterion.gender.type,
+                   ad_group_criterion.parental_status.type,
+                   ad_group_criterion.income_range.type,
+                   ad_group.id, ad_group.name,
+                   campaign.id, campaign.name
+            FROM ad_group_criterion
+            WHERE ad_group.id = {ad_group_id}
+              AND ad_group_criterion.type IN ({demographic_types})
+            ORDER BY ad_group_criterion.type
+        """
+        level = "ad_group"
+    else:
+        query = f"""
+            SELECT campaign_criterion.criterion_id,
+                   campaign_criterion.type,
+                   campaign_criterion.negative,
+                   campaign_criterion.status,
+                   campaign_criterion.age_range.type,
+                   campaign_criterion.gender.type,
+                   campaign_criterion.parental_status.type,
+                   campaign_criterion.income_range.type,
+                   campaign.id, campaign.name
+            FROM campaign_criterion
+            WHERE campaign.id = {campaign_id}
+              AND campaign_criterion.type IN ({demographic_types})
+            ORDER BY campaign_criterion.type
+        """
+        level = "campaign"
+
+    rows = execute_query(config, customer_id, query)
+
+    # Surface the composite resource ID for each criterion so the AI can pass
+    # it straight to remove_entity (which expects 'parentId~criterionId').
+    for row in rows:
+        criterion_id = row.get(f"{level}_criterion.criterion_id")
+        if criterion_id is None:
+            continue
+        if level == "ad_group":
+            parent_id = row.get("ad_group.id")
+        else:
+            parent_id = row.get("campaign.id")
+        if parent_id is not None:
+            row["remove_id"] = f"{parent_id}~{criterion_id}"
+
+    insights: list[str] = []
+    if not rows:
+        insights.append(
+            f"No demographic criteria found on this {level}. By default, Google "
+            f"Ads serves ads to all age/gender/parental/income segments — "
+            f"criteria only appear here once you actively exclude or narrow them."
+        )
+    else:
+        negatives = sum(
+            1 for r in rows
+            if r.get(f"{level}_criterion.negative") is True
+        )
+        if negatives:
+            insights.append(
+                f"{negatives} demographic exclusion(s) active on this {level}. "
+                f"Excluded segments will not see ads."
+            )
+
+    return {
+        "level": level,
+        "criteria": rows,
+        "total_criteria": len(rows),
+        "insights": insights,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

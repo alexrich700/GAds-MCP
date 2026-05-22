@@ -66,6 +66,132 @@ def _normalize_rsa_assets(items: list) -> list[dict]:
     return out
 
 
+# Demographic targeting — Google Ads exposes four demographic dimensions.
+# By default, ads serve to all segments. Criteria added below either exclude
+# (negative=True, the common case) or narrow targeting (negative=False).
+_AGE_RANGE_TYPES = {
+    "AGE_RANGE_18_24",
+    "AGE_RANGE_25_34",
+    "AGE_RANGE_35_44",
+    "AGE_RANGE_45_54",
+    "AGE_RANGE_55_64",
+    "AGE_RANGE_65_UP",
+    "AGE_RANGE_UNDETERMINED",
+}
+
+_GENDER_TYPES = {"FEMALE", "MALE", "UNDETERMINED"}
+
+_PARENTAL_STATUS_TYPES = {"PARENT", "NOT_A_PARENT", "UNDETERMINED"}
+
+# Income ranges are demographic PERCENTILES (top X% by income in supported
+# countries), not currency buckets. Available primarily in US/AU/JP.
+_INCOME_RANGE_TYPES = {
+    "INCOME_RANGE_0_50",   # Lower 50%
+    "INCOME_RANGE_50_60",  # 41-50%
+    "INCOME_RANGE_60_70",  # 31-40%
+    "INCOME_RANGE_70_80",  # 21-30%
+    "INCOME_RANGE_80_90",  # 11-20%
+    "INCOME_RANGE_90_UP",  # Top 10%
+    "INCOME_RANGE_UNDETERMINED",
+}
+
+# Human-readable aliases → API enum. Lowercased keys; lookup uses .lower().
+_AGE_RANGE_ALIASES = {
+    "18-24": "AGE_RANGE_18_24",
+    "25-34": "AGE_RANGE_25_34",
+    "35-44": "AGE_RANGE_35_44",
+    "45-54": "AGE_RANGE_45_54",
+    "55-64": "AGE_RANGE_55_64",
+    "65+": "AGE_RANGE_65_UP",
+    "65-up": "AGE_RANGE_65_UP",
+    "undetermined": "AGE_RANGE_UNDETERMINED",
+    "unknown": "AGE_RANGE_UNDETERMINED",
+}
+
+_GENDER_ALIASES = {
+    "female": "FEMALE",
+    "f": "FEMALE",
+    "male": "MALE",
+    "m": "MALE",
+    "undetermined": "UNDETERMINED",
+    "unknown": "UNDETERMINED",
+}
+
+_PARENTAL_ALIASES = {
+    "parent": "PARENT",
+    "parents": "PARENT",
+    "not_a_parent": "NOT_A_PARENT",
+    "not-a-parent": "NOT_A_PARENT",
+    "not a parent": "NOT_A_PARENT",
+    "non-parent": "NOT_A_PARENT",
+    "undetermined": "UNDETERMINED",
+    "unknown": "UNDETERMINED",
+}
+
+_INCOME_ALIASES = {
+    "lower-50": "INCOME_RANGE_0_50",
+    "0-50": "INCOME_RANGE_0_50",
+    "41-50": "INCOME_RANGE_50_60",
+    "50-60": "INCOME_RANGE_50_60",
+    "31-40": "INCOME_RANGE_60_70",
+    "60-70": "INCOME_RANGE_60_70",
+    "21-30": "INCOME_RANGE_70_80",
+    "70-80": "INCOME_RANGE_70_80",
+    "11-20": "INCOME_RANGE_80_90",
+    "80-90": "INCOME_RANGE_80_90",
+    "top-10": "INCOME_RANGE_90_UP",
+    "top 10%": "INCOME_RANGE_90_UP",
+    "90-up": "INCOME_RANGE_90_UP",
+    "90+": "INCOME_RANGE_90_UP",
+    "undetermined": "INCOME_RANGE_UNDETERMINED",
+    "unknown": "INCOME_RANGE_UNDETERMINED",
+}
+
+
+def _normalize_demographic_values(
+    values: list[str] | None,
+    enum_set: set[str],
+    alias_map: dict[str, str],
+    dimension: str,
+) -> tuple[list[str], list[str]]:
+    """Map a user-supplied list to Google Ads enum strings.
+
+    Returns (normalized_values, errors). Accepts either the canonical enum
+    (case-insensitive) or a human-readable alias like '25-34' or 'female'.
+    """
+    if not values:
+        return [], []
+
+    normalized: list[str] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        if not isinstance(raw, str):
+            errors.append(f"{dimension}: values must be strings, got {type(raw).__name__}")
+            continue
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        upper = candidate.upper().replace(" ", "_").replace("-", "_")
+        lower = candidate.lower()
+        if upper in enum_set:
+            api_value = upper
+        elif lower in alias_map:
+            api_value = alias_map[lower]
+        else:
+            errors.append(
+                f"{dimension}: '{raw}' is not a valid value. "
+                f"Use one of {sorted(enum_set)} or a human-readable alias."
+            )
+            continue
+        if api_value in seen:
+            continue
+        seen.add(api_value)
+        normalized.append(api_value)
+
+    return normalized, errors
+
+
 # ---------------------------------------------------------------------------
 # URL validation — verify URLs exist before creating ads/sitelinks
 # ---------------------------------------------------------------------------
@@ -647,6 +773,116 @@ def detach_shared_set_from_campaigns(
     )
     store_plan(plan)
     return plan.to_preview()
+
+
+def draft_demographic_targeting(
+    config: AdLoopConfig,
+    *,
+    customer_id: str = "",
+    ad_group_id: str = "",
+    campaign_id: str = "",
+    age_ranges: list[str] | None = None,
+    genders: list[str] | None = None,
+    parental_statuses: list[str] | None = None,
+    income_ranges: list[str] | None = None,
+    negative: bool = True,
+) -> dict:
+    """Draft demographic targeting criteria (age, gender, parental status, income) — returns PREVIEW.
+
+    By default, Google Ads serves to all demographic segments. This tool adds
+    criteria that either EXCLUDE a segment (negative=True, default) or NARROW
+    targeting to it (negative=False — uncommon).
+
+    Provide either `ad_group_id` or `campaign_id`. At least one of the
+    demographic lists (age_ranges/genders/parental_statuses/income_ranges)
+    must be non-empty.
+
+    Accepted values per dimension:
+    - age_ranges: '18-24', '25-34', '35-44', '45-54', '55-64', '65+' (or the
+      canonical AGE_RANGE_18_24 etc.). Note: Google's buckets are fixed —
+      'Exclude 23-35' has no exact mapping; you must pick the closest buckets.
+    - genders: 'female', 'male', 'undetermined'
+    - parental_statuses: 'parent', 'not_a_parent', 'undetermined'
+    - income_ranges: PERCENTILE buckets, not currency. 'top-10' (top 10%),
+      '11-20', '21-30', '31-40', '41-50', 'lower-50', 'undetermined'.
+      Only available in select countries (US, AU, JP, etc.).
+    """
+    from adloop.safety.guards import SafetyViolation, check_blocked_operation
+    from adloop.safety.preview import ChangePlan, store_plan
+
+    try:
+        check_blocked_operation("add_demographic_criteria", config.safety)
+    except SafetyViolation as e:
+        return {"error": str(e)}
+
+    errors: list[str] = []
+    if bool(ad_group_id) == bool(campaign_id):
+        errors.append(
+            "Provide exactly one of ad_group_id or campaign_id"
+        )
+
+    age_values, age_errors = _normalize_demographic_values(
+        age_ranges, _AGE_RANGE_TYPES, _AGE_RANGE_ALIASES, "age_ranges"
+    )
+    gender_values, gender_errors = _normalize_demographic_values(
+        genders, _GENDER_TYPES, _GENDER_ALIASES, "genders"
+    )
+    parental_values, parental_errors = _normalize_demographic_values(
+        parental_statuses,
+        _PARENTAL_STATUS_TYPES,
+        _PARENTAL_ALIASES,
+        "parental_statuses",
+    )
+    income_values, income_errors = _normalize_demographic_values(
+        income_ranges, _INCOME_RANGE_TYPES, _INCOME_ALIASES, "income_ranges"
+    )
+    errors.extend(age_errors + gender_errors + parental_errors + income_errors)
+
+    if not (age_values or gender_values or parental_values or income_values):
+        errors.append(
+            "At least one of age_ranges, genders, parental_statuses, or "
+            "income_ranges must contain a value"
+        )
+
+    if errors:
+        return {"error": "Validation failed", "details": errors}
+
+    warnings: list[str] = []
+    if not negative:
+        warnings.append(
+            "negative=False adds POSITIVE demographic criteria, which NARROWS "
+            "targeting. Users not matching the criteria (plus UNDETERMINED) "
+            "will no longer see ads. This is uncommon — exclusions are the "
+            "typical pattern."
+        )
+    excludes_all_age = len(age_values) >= len(_AGE_RANGE_TYPES) - 1
+    excludes_all_gender = len(gender_values) >= len(_GENDER_TYPES) - 1
+    if negative and (excludes_all_age or excludes_all_gender):
+        warnings.append(
+            "Excluding nearly every value in a single demographic dimension "
+            "will reduce ad delivery sharply. Verify this is intentional."
+        )
+
+    plan = ChangePlan(
+        operation="add_demographic_criteria",
+        entity_type="ad_group_criterion" if ad_group_id else "campaign_criterion",
+        entity_id=ad_group_id or campaign_id,
+        customer_id=customer_id,
+        changes={
+            "ad_group_id": ad_group_id,
+            "campaign_id": campaign_id,
+            "age_ranges": age_values,
+            "genders": gender_values,
+            "parental_statuses": parental_values,
+            "income_ranges": income_values,
+            "negative": negative,
+        },
+    )
+    store_plan(plan)
+    preview = plan.to_preview()
+    if warnings:
+        preview["warnings"] = warnings
+    return preview
 
 
 def update_ad_group(
@@ -1507,8 +1743,13 @@ def confirm_and_apply(
 _VALID_MATCH_TYPES = {"EXACT", "PHRASE", "BROAD"}
 _VALID_ENTITY_TYPES = {"campaign", "ad_group", "ad", "keyword"}
 _REMOVABLE_ENTITY_TYPES = _VALID_ENTITY_TYPES | {
-    "negative_keyword", "campaign_asset", "asset", "customer_asset",
+    "negative_keyword",
     "shared_criterion",
+    "ad_group_criterion",
+    "campaign_criterion",
+    "campaign_asset",
+    "asset",
+    "customer_asset",
 }
 
 _SMART_BIDDING_STRATEGIES = {
@@ -2148,6 +2389,7 @@ def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
         "add_to_negative_keyword_list": _apply_add_to_negative_keyword_list,
         "attach_shared_set_to_campaigns": _apply_attach_shared_set_to_campaigns,
         "detach_shared_set_from_campaigns": _apply_detach_shared_set_from_campaigns,
+        "add_demographic_criteria": _apply_add_demographic_criteria,
         "pause_entity": _apply_status_change,
         "enable_entity": _apply_status_change,
         "remove_entity": _apply_remove,
@@ -2647,6 +2889,101 @@ def _apply_add_negative_keywords(client: object, cid: str, changes: dict) -> dic
     return {"resource_names": [r.resource_name for r in response.results]}
 
 
+def _apply_add_demographic_criteria(
+    client: object, cid: str, changes: dict
+) -> dict:
+    """Create AGE_RANGE/GENDER/PARENTAL_STATUS/INCOME_RANGE criteria.
+
+    Creates ad_group_criterion entries when `ad_group_id` is set, otherwise
+    campaign_criterion entries when `campaign_id` is set.
+    """
+    ad_group_id = changes.get("ad_group_id") or ""
+    campaign_id = changes.get("campaign_id") or ""
+    negative = bool(changes.get("negative", True))
+
+    if ad_group_id:
+        service = client.get_service("AdGroupCriterionService")
+        ad_group_path = client.get_service("AdGroupService").ad_group_path(
+            cid, ad_group_id
+        )
+
+        def make_criterion():
+            op = client.get_type("AdGroupCriterionOperation")
+            criterion = op.create
+            criterion.ad_group = ad_group_path
+            criterion.negative = negative
+            return op, criterion
+
+        operations = _build_demographic_criteria(client, changes, make_criterion)
+        response = service.mutate_ad_group_criteria(
+            customer_id=cid, operations=operations
+        )
+        return {"resource_names": [r.resource_name for r in response.results]}
+
+    if campaign_id:
+        service = client.get_service("CampaignCriterionService")
+        campaign_path = client.get_service("CampaignService").campaign_path(
+            cid, campaign_id
+        )
+
+        def make_criterion():
+            op = client.get_type("CampaignCriterionOperation")
+            criterion = op.create
+            criterion.campaign = campaign_path
+            criterion.negative = negative
+            return op, criterion
+
+        operations = _build_demographic_criteria(client, changes, make_criterion)
+        response = service.mutate_campaign_criteria(
+            customer_id=cid, operations=operations
+        )
+        return {"resource_names": [r.resource_name for r in response.results]}
+
+    raise ValueError("Either ad_group_id or campaign_id must be set")
+
+
+def _build_demographic_criteria(
+    client: object,
+    changes: dict,
+    make_criterion: object,
+) -> list:
+    """Build the list of criterion operations from the four demographic dimensions.
+
+    `make_criterion` is a zero-arg callable that returns a fresh
+    (operation, criterion) pair pre-populated with the parent (ad_group or
+    campaign) and negative flag.
+    """
+    operations = []
+
+    for value in changes.get("age_ranges") or []:
+        op, criterion = make_criterion()
+        criterion.age_range.type_ = getattr(
+            client.enums.AgeRangeTypeEnum, value
+        )
+        operations.append(op)
+
+    for value in changes.get("genders") or []:
+        op, criterion = make_criterion()
+        criterion.gender.type_ = getattr(client.enums.GenderTypeEnum, value)
+        operations.append(op)
+
+    for value in changes.get("parental_statuses") or []:
+        op, criterion = make_criterion()
+        criterion.parental_status.type_ = getattr(
+            client.enums.ParentalStatusTypeEnum, value
+        )
+        operations.append(op)
+
+    for value in changes.get("income_ranges") or []:
+        op, criterion = make_criterion()
+        criterion.income_range.type_ = getattr(
+            client.enums.IncomeRangeTypeEnum, value
+        )
+        operations.append(op)
+
+    return operations
+
+
 def _resolve_ad_entity_id(client: object, cid: str, entity_id: str) -> str:
     """Ensure ad entity_id is in 'adGroupId~adId' composite format.
 
@@ -2705,7 +3042,7 @@ def _apply_remove(
             customer_id=cid, operations=[operation]
         )
 
-    elif entity_type == "keyword":
+    elif entity_type in ("keyword", "ad_group_criterion"):
         service = client.get_service("AdGroupCriterionService")
         operation = client.get_type("AdGroupCriterionOperation")
         operation.remove = f"customers/{cid}/adGroupCriteria/{entity_id}"
@@ -2713,7 +3050,7 @@ def _apply_remove(
             customer_id=cid, operations=[operation]
         )
 
-    elif entity_type == "negative_keyword":
+    elif entity_type in ("negative_keyword", "campaign_criterion"):
         service = client.get_service("CampaignCriterionService")
         operation = client.get_type("CampaignCriterionOperation")
         operation.remove = f"customers/{cid}/campaignCriteria/{entity_id}"

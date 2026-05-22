@@ -1278,6 +1278,269 @@ class TestGetNegativeKeywordListInputValidation:
         assert "numeric" in result["error"]
 
 
+class TestDraftDemographicTargeting:
+    def test_returns_preview_for_age_exclusion_on_ad_group(self, config):
+        result = write.draft_demographic_targeting(
+            config,
+            customer_id="123-456-7890",
+            ad_group_id="2002",
+            age_ranges=["25-34", "35-44"],
+        )
+        assert result["operation"] == "add_demographic_criteria"
+        assert result["entity_type"] == "ad_group_criterion"
+        assert result["entity_id"] == "2002"
+        assert result["changes"]["age_ranges"] == [
+            "AGE_RANGE_25_34",
+            "AGE_RANGE_35_44",
+        ]
+        assert result["changes"]["negative"] is True
+        assert result["status"] == "PENDING_CONFIRMATION"
+
+    def test_accepts_canonical_enum_values(self, config):
+        result = write.draft_demographic_targeting(
+            config,
+            ad_group_id="2002",
+            genders=["MALE"],
+            parental_statuses=["NOT_A_PARENT"],
+        )
+        assert result["changes"]["genders"] == ["MALE"]
+        assert result["changes"]["parental_statuses"] == ["NOT_A_PARENT"]
+
+    def test_accepts_human_readable_aliases(self, config):
+        result = write.draft_demographic_targeting(
+            config,
+            ad_group_id="2002",
+            genders=["female"],
+            parental_statuses=["parent"],
+            income_ranges=["top-10"],
+        )
+        assert result["changes"]["genders"] == ["FEMALE"]
+        assert result["changes"]["parental_statuses"] == ["PARENT"]
+        assert result["changes"]["income_ranges"] == ["INCOME_RANGE_90_UP"]
+
+    def test_supports_campaign_level(self, config):
+        result = write.draft_demographic_targeting(
+            config,
+            campaign_id="1001",
+            age_ranges=["18-24"],
+        )
+        assert result["entity_type"] == "campaign_criterion"
+        assert result["entity_id"] == "1001"
+        assert result["changes"]["campaign_id"] == "1001"
+
+    def test_requires_exactly_one_parent(self, config):
+        both = write.draft_demographic_targeting(
+            config,
+            ad_group_id="2002",
+            campaign_id="1001",
+            age_ranges=["25-34"],
+        )
+        assert both["error"] == "Validation failed"
+        assert any(
+            "exactly one of ad_group_id or campaign_id" in d
+            for d in both["details"]
+        )
+
+        neither = write.draft_demographic_targeting(
+            config,
+            age_ranges=["25-34"],
+        )
+        assert neither["error"] == "Validation failed"
+
+    def test_requires_at_least_one_dimension_value(self, config):
+        result = write.draft_demographic_targeting(
+            config,
+            ad_group_id="2002",
+        )
+        assert result["error"] == "Validation failed"
+        assert any("at least one" in d.lower() for d in result["details"])
+
+    def test_rejects_invalid_value(self, config):
+        result = write.draft_demographic_targeting(
+            config,
+            ad_group_id="2002",
+            age_ranges=["23-35"],
+        )
+        assert result["error"] == "Validation failed"
+        assert any("23-35" in d for d in result["details"])
+
+    def test_deduplicates_values(self, config):
+        result = write.draft_demographic_targeting(
+            config,
+            ad_group_id="2002",
+            age_ranges=["25-34", "AGE_RANGE_25_34", "25-34"],
+        )
+        assert result["changes"]["age_ranges"] == ["AGE_RANGE_25_34"]
+
+    def test_positive_targeting_emits_warning(self, config):
+        result = write.draft_demographic_targeting(
+            config,
+            ad_group_id="2002",
+            genders=["female"],
+            negative=False,
+        )
+        assert result["changes"]["negative"] is False
+        assert "warnings" in result
+        assert any("narrows" in w.lower() for w in result["warnings"])
+
+
+class _FakeAdGroupCriterionService:
+    def __init__(self):
+        self.operations = None
+
+    def mutate_ad_group_criteria(self, customer_id, operations):
+        self.operations = operations
+        return SimpleNamespace(
+            results=[
+                SimpleNamespace(
+                    resource_name=f"customers/{customer_id}/adGroupCriteria/2002~{i}"
+                )
+                for i, _ in enumerate(operations)
+            ]
+        )
+
+
+class _FakeCampaignCriterionService:
+    def __init__(self):
+        self.operations = None
+
+    def mutate_campaign_criteria(self, customer_id, operations):
+        self.operations = operations
+        return SimpleNamespace(
+            results=[
+                SimpleNamespace(
+                    resource_name=f"customers/{customer_id}/campaignCriteria/1001~{i}"
+                )
+                for i, _ in enumerate(operations)
+            ]
+        )
+
+
+def test_apply_add_demographic_criteria_at_ad_group_level():
+    crit_service = _FakeAdGroupCriterionService()
+    client = _FakeClient({
+        "AdGroupCriterionService": crit_service,
+        "AdGroupService": _FakePathService("adGroups"),
+    })
+
+    write._apply_add_demographic_criteria(
+        client,
+        "1234567890",
+        {
+            "ad_group_id": "2002",
+            "campaign_id": "",
+            "age_ranges": ["AGE_RANGE_25_34"],
+            "genders": ["FEMALE"],
+            "parental_statuses": [],
+            "income_ranges": [],
+            "negative": True,
+        },
+    )
+
+    assert len(crit_service.operations) == 2
+    age_op = crit_service.operations[0].create
+    gender_op = crit_service.operations[1].create
+    assert age_op.negative is True
+    assert age_op.ad_group == "customers/1234567890/adGroups/2002"
+    # AgeRangeTypeEnum.AGE_RANGE_25_34 → 503000
+    assert age_op.age_range.type_ == client.enums.AgeRangeTypeEnum.AGE_RANGE_25_34
+    assert gender_op.gender.type_ == client.enums.GenderTypeEnum.FEMALE
+
+
+def test_apply_add_demographic_criteria_at_campaign_level():
+    crit_service = _FakeCampaignCriterionService()
+    client = _FakeClient({
+        "CampaignCriterionService": crit_service,
+        "CampaignService": _FakePathService("campaigns"),
+    })
+
+    write._apply_add_demographic_criteria(
+        client,
+        "1234567890",
+        {
+            "ad_group_id": "",
+            "campaign_id": "1001",
+            "age_ranges": [],
+            "genders": [],
+            "parental_statuses": [],
+            "income_ranges": ["INCOME_RANGE_90_UP"],
+            "negative": True,
+        },
+    )
+
+    assert len(crit_service.operations) == 1
+    op = crit_service.operations[0].create
+    assert op.campaign == "customers/1234567890/campaigns/1001"
+    assert op.negative is True
+    assert op.income_range.type_ == client.enums.IncomeRangeTypeEnum.INCOME_RANGE_90_UP
+
+
+def test_remove_entity_accepts_ad_group_criterion_alias(config):
+    """Demographic criteria should be removable via the semantic alias."""
+    result = write.remove_entity(
+        config,
+        customer_id="123-456-7890",
+        entity_type="ad_group_criterion",
+        entity_id="2002~99",
+    )
+    assert result["operation"] == "remove_entity"
+    assert result["entity_type"] == "ad_group_criterion"
+    assert result["entity_id"] == "2002~99"
+
+
+def test_remove_entity_accepts_campaign_criterion_alias(config):
+    result = write.remove_entity(
+        config,
+        customer_id="123-456-7890",
+        entity_type="campaign_criterion",
+        entity_id="1001~99",
+    )
+    assert result["entity_type"] == "campaign_criterion"
+
+
+class TestGetDemographicTargeting:
+    def test_requires_one_parent(self, config):
+        no_parent = read.get_demographic_targeting(config)
+        assert "error" in no_parent
+        both = read.get_demographic_targeting(
+            config, ad_group_id="2002", campaign_id="1001"
+        )
+        assert "error" in both
+
+    def test_enriches_rows_with_remove_id(self, config, monkeypatch):
+        fake_rows = [
+            {
+                "ad_group_criterion.criterion_id": "99",
+                "ad_group_criterion.type": "AGE_RANGE",
+                "ad_group_criterion.negative": True,
+                "ad_group_criterion.status": "ENABLED",
+                "ad_group_criterion.age_range.type": "AGE_RANGE_25_34",
+                "ad_group.id": "2002",
+                "ad_group.name": "Brand Terms",
+                "campaign.id": "1001",
+                "campaign.name": "Search Launch",
+            }
+        ]
+        monkeypatch.setattr(
+            "adloop.ads.gaql.execute_query", lambda *_a, **_kw: fake_rows
+        )
+        result = read.get_demographic_targeting(
+            config, customer_id="123-456-7890", ad_group_id="2002"
+        )
+        assert result["level"] == "ad_group"
+        assert result["total_criteria"] == 1
+        assert result["criteria"][0]["remove_id"] == "2002~99"
+        assert any("exclusion" in i.lower() for i in result["insights"])
+
+    def test_empty_emits_default_insight(self, config, monkeypatch):
+        monkeypatch.setattr("adloop.ads.gaql.execute_query", lambda *_a, **_kw: [])
+        result = read.get_demographic_targeting(
+            config, ad_group_id="2002"
+        )
+        assert result["total_criteria"] == 0
+        assert any("no demographic criteria" in i.lower() for i in result["insights"])
+
+
 def test_extract_error_message_handles_plain_exceptions():
     assert write._extract_error_message(ValueError("something broke")) == "something broke"
 
