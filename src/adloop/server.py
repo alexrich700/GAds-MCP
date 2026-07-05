@@ -10,11 +10,8 @@ from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BeforeValidator
 
-from adloop import _mcp_patches, diagnostics
-from adloop.config import load_config
-
-diagnostics.install()
-_mcp_patches.install()
+from adloop import diagnostics
+from adloop.runtime import current_config
 
 _READONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
 _WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
@@ -124,8 +121,6 @@ mcp = FastMCP(
     "AdLoop",
     instructions=_build_orchestration_instructions(),
 )
-
-_config = load_config()
 
 
 def _structured_error(fn_name: str, exc: Exception) -> dict:
@@ -239,7 +234,7 @@ def health_check() -> dict:
     try:
         from adloop.ga4.reports import get_account_summaries as _ga4_test
 
-        result = _ga4_test(_config)
+        result = _ga4_test(current_config())
         status["ga4"] = "ok"
         status["ga4_properties"] = result.get("total_properties", 0)
     except Exception as e:
@@ -262,9 +257,9 @@ def health_check() -> dict:
         # and its size/latency is the likely culprit when the MCP host kills the
         # connection shortly after health_check. Call list_accounts explicitly
         # if a count or listing is actually needed.
-        mcc_id = _config.ads.login_customer_id or _config.ads.customer_id
+        mcc_id = current_config().ads.login_customer_id or current_config().ads.customer_id
         execute_query(
-            _config,
+            current_config(),
             mcc_id,
             "SELECT customer.id, customer.descriptive_name FROM customer LIMIT 1",
         )
@@ -304,7 +299,7 @@ def get_account_summaries() -> dict:
     """
     from adloop.ga4.reports import get_account_summaries as _impl
 
-    return _impl(_config)
+    return _impl(current_config())
 
 
 @mcp.tool(annotations=_READONLY)
@@ -328,8 +323,8 @@ def run_ga4_report(
     from adloop.ga4.reports import run_ga4_report as _impl
 
     return _impl(
-        _config,
-        property_id=property_id or _config.ga4.property_id,
+        current_config(),
+        property_id=property_id or current_config().ga4.property_id,
         dimensions=dimensions,
         metrics=metrics,
         date_range_start=date_range_start,
@@ -354,8 +349,8 @@ def run_realtime_report(
     from adloop.ga4.reports import run_realtime_report as _impl
 
     return _impl(
-        _config,
-        property_id=property_id or _config.ga4.property_id,
+        current_config(),
+        property_id=property_id or current_config().ga4.property_id,
         dimensions=dimensions,
         metrics=metrics,
     )
@@ -376,8 +371,8 @@ def get_tracking_events(
     from adloop.ga4.tracking import get_tracking_events as _impl
 
     return _impl(
-        _config,
-        property_id=property_id or _config.ga4.property_id,
+        current_config(),
+        property_id=property_id or current_config().ga4.property_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
     )
@@ -404,7 +399,7 @@ def list_accounts(limit: int = 200) -> dict:
     """
     from adloop.ads.read import list_accounts as _impl
 
-    return _impl(_config, limit=limit)
+    return _impl(current_config(), limit=limit)
 
 
 @mcp.tool(annotations=_READONLY)
@@ -423,8 +418,8 @@ def get_campaign_performance(
     from adloop.ads.read import get_campaign_performance as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
     )
@@ -445,8 +440,8 @@ def get_ad_performance(
     from adloop.ads.read import get_ad_performance as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
     )
@@ -467,8 +462,8 @@ def get_keyword_performance(
     from adloop.ads.read import get_keyword_performance as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
     )
@@ -489,8 +484,8 @@ def get_search_terms(
     from adloop.ads.read import get_search_terms as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
     )
@@ -510,8 +505,8 @@ def get_negative_keywords(
     from adloop.ads.read import get_negative_keywords as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
     )
 
@@ -529,7 +524,7 @@ def get_negative_keyword_lists(
     """
     from adloop.ads.read import get_negative_keyword_lists as _impl
 
-    return _impl(_config, customer_id=customer_id or _config.ads.customer_id)
+    return _impl(current_config(), customer_id=customer_id or current_config().ads.customer_id)
 
 
 @mcp.tool(annotations=_READONLY)
@@ -545,8 +540,8 @@ def get_negative_keyword_list_keywords(
     from adloop.ads.read import get_negative_keyword_list_keywords as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         shared_set_id=shared_set_id,
     )
 
@@ -565,8 +560,8 @@ def get_negative_keyword_list_campaigns(
     from adloop.ads.read import get_negative_keyword_list_campaigns as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         shared_set_id=shared_set_id,
     )
 
@@ -598,8 +593,8 @@ def get_recommendations(
     from adloop.ads.read import get_recommendations as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         recommendation_types=recommendation_types,
         campaign_id=campaign_id,
     )
@@ -629,8 +624,8 @@ def get_pmax_performance(
     from adloop.ads.pmax import get_pmax_performance as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
     )
@@ -659,8 +654,8 @@ def get_asset_performance(
     from adloop.ads.pmax import get_asset_performance as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
     )
 
@@ -682,8 +677,8 @@ def get_detailed_asset_performance(
     from adloop.ads.pmax import get_detailed_asset_performance as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
     )
 
@@ -711,8 +706,8 @@ def get_audience_performance(
     from adloop.ads.read import get_audience_performance as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
         campaign_id=campaign_id,
@@ -745,9 +740,9 @@ def analyze_campaign_conversions(
     from adloop.crossref import analyze_campaign_conversions as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
-        property_id=property_id or _config.ga4.property_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
+        property_id=property_id or current_config().ga4.property_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
         campaign_name=campaign_name,
@@ -772,9 +767,9 @@ def landing_page_analysis(
     from adloop.crossref import landing_page_analysis as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
-        property_id=property_id or _config.ga4.property_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
+        property_id=property_id or current_config().ga4.property_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
     )
@@ -802,9 +797,9 @@ def attribution_check(
     from adloop.crossref import attribution_check as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
-        property_id=property_id or _config.ga4.property_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
+        property_id=property_id or current_config().ga4.property_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
         conversion_events=conversion_events,
@@ -828,8 +823,8 @@ def run_gaql(
     from adloop.ads.gaql import run_gaql as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         query=query,
         format=format,
     )
@@ -888,8 +883,8 @@ def draft_campaign(
     from adloop.ads.write import draft_campaign as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_name=campaign_name,
         daily_budget=daily_budget,
         bidding_strategy=bidding_strategy,
@@ -931,8 +926,8 @@ def draft_ad_group(
     from adloop.ads.write import draft_ad_group as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
         ad_group_name=ad_group_name,
         keywords=keywords,
@@ -981,8 +976,8 @@ def update_campaign(
     from adloop.ads.write import update_campaign as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
         bidding_strategy=bidding_strategy,
         target_cpa=target_cpa,
@@ -1029,8 +1024,8 @@ def draft_responsive_search_ad(
     from adloop.ads.write import draft_responsive_search_ad as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         ad_group_id=ad_group_id,
         headlines=headlines,
         descriptions=descriptions,
@@ -1055,8 +1050,8 @@ def draft_keywords(
     from adloop.ads.write import draft_keywords as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         ad_group_id=ad_group_id,
         keywords=keywords,
     )
@@ -1079,8 +1074,8 @@ def add_negative_keywords(
     from adloop.ads.write import add_negative_keywords as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
         keywords=keywords,
         match_type=match_type,
@@ -1106,8 +1101,8 @@ def propose_negative_keyword_list(
     from adloop.ads.write import propose_negative_keyword_list as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
         list_name=list_name,
         keywords=keywords,
@@ -1140,8 +1135,8 @@ def add_to_negative_keyword_list(
     from adloop.ads.write import add_to_negative_keyword_list as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         shared_set_id=shared_set_id,
         keywords=keywords,
         match_type=match_type,
@@ -1172,8 +1167,8 @@ def attach_shared_set_to_campaigns(
     from adloop.ads.write import attach_shared_set_to_campaigns as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         shared_set_id=shared_set_id,
         campaign_ids=campaign_ids,
     )
@@ -1203,8 +1198,8 @@ def detach_shared_set_from_campaigns(
     from adloop.ads.write import detach_shared_set_from_campaigns as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         shared_set_id=shared_set_id,
         campaign_ids=campaign_ids,
     )
@@ -1222,8 +1217,8 @@ def update_ad_group(
     from adloop.ads.write import update_ad_group as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         ad_group_id=ad_group_id,
         ad_group_name=ad_group_name,
         max_cpc=max_cpc,
@@ -1241,8 +1236,8 @@ def draft_callouts(
     from adloop.ads.write import draft_callouts as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
         callouts=callouts,
     )
@@ -1259,8 +1254,8 @@ def draft_structured_snippets(
     from adloop.ads.write import draft_structured_snippets as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
         snippets=snippets,
     )
@@ -1277,8 +1272,8 @@ def draft_image_assets(
     from adloop.ads.write import draft_image_assets as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
         image_paths=image_paths,
     )
@@ -1305,8 +1300,8 @@ def pause_entity(
     from adloop.ads.write import pause_entity as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         entity_type=entity_type,
         entity_id=entity_id,
     )
@@ -1333,8 +1328,8 @@ def enable_entity(
     from adloop.ads.write import enable_entity as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         entity_type=entity_type,
         entity_id=entity_id,
     )
@@ -1369,8 +1364,8 @@ def remove_entity(
     from adloop.ads.write import remove_entity as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         entity_type=entity_type,
         entity_id=entity_id,
     )
@@ -1402,8 +1397,8 @@ def draft_sitelinks(
     from adloop.ads.write import draft_sitelinks as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
         sitelinks=sitelinks,
     )
@@ -1433,7 +1428,7 @@ def confirm_and_apply(
     """
     from adloop.ads.write import confirm_and_apply as _impl
 
-    return _impl(_config, plan_id=plan_id, dry_run=dry_run)
+    return _impl(current_config(), plan_id=plan_id, dry_run=dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -1461,9 +1456,9 @@ def validate_tracking(
     from adloop.tracking import validate_tracking as _impl
 
     return _impl(
-        _config,
+        current_config(),
         expected_events=expected_events,
-        property_id=property_id or _config.ga4.property_id,
+        property_id=property_id or current_config().ga4.property_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
     )
@@ -1490,11 +1485,11 @@ def generate_tracking_code(
     from adloop.tracking import generate_tracking_code as _impl
 
     return _impl(
-        _config,
+        current_config(),
         event_name=event_name,
         event_params=event_params,
         trigger=trigger,
-        property_id=property_id or _config.ga4.property_id,
+        property_id=property_id or current_config().ga4.property_id,
         check_existing=check_existing,
     )
 
@@ -1529,13 +1524,13 @@ def estimate_budget(
     from adloop.ads.forecast import estimate_budget as _impl
 
     return _impl(
-        _config,
+        current_config(),
         keywords=keywords,
         daily_budget=daily_budget,
         geo_target_id=geo_target_id,
         language_id=language_id,
         forecast_days=forecast_days,
-        customer_id=customer_id or _config.ads.customer_id,
+        customer_id=customer_id or current_config().ads.customer_id,
     )
 
 
@@ -1566,13 +1561,13 @@ def discover_keywords(
     from adloop.ads.forecast import discover_keywords as _impl
 
     return _impl(
-        _config,
+        current_config(),
         seed_keywords=seed_keywords,
         url=url,
         geo_target_id=geo_target_id,
         language_id=language_id,
         page_size=page_size,
-        customer_id=customer_id or _config.ads.customer_id,
+        customer_id=customer_id or current_config().ads.customer_id,
     )
 
 

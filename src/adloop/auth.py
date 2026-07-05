@@ -1,10 +1,20 @@
-"""Google API authentication — OAuth 2.0 and service account support."""
+"""Google API authentication — OAuth 2.0 and service account support.
+
+Credential acquisition is pluggable: :class:`LocalFileCredentialsProvider`
+implements the OSS behavior (credentials.json chain, ``~/.adloop/token.json``,
+interactive browser flow), and a hosted deployment swaps in its own provider
+via :func:`set_credentials_provider` (e.g. tokens from an encrypted database,
+refreshed out-of-band). All client construction goes through the module-level
+:func:`get_ga4_credentials` / :func:`get_ads_credentials`, which delegate to
+the active provider.
+"""
 
 from __future__ import annotations
 
 import importlib.resources
+import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from google.auth.credentials import Credentials
@@ -28,6 +38,64 @@ _GA4_SCOPES = [
 _ADS_SCOPES = [
     "https://www.googleapis.com/auth/adwords",
 ]
+
+
+class CredentialsProvider(Protocol):
+    """Source of authenticated Google credentials for the current context."""
+
+    def ga4_credentials(self, config: AdLoopConfig) -> Credentials: ...
+
+    def ads_credentials(self, config: AdLoopConfig) -> Credentials: ...
+
+
+class LocalFileCredentialsProvider:
+    """OSS default: local credential files + interactive OAuth.
+
+    Refuses to run in server mode — falling back to the operator's own
+    ``~/.adloop`` tokens in a multi-tenant process would silently serve
+    one tenant's request with another identity's credentials.
+    """
+
+    def _guard_local_only(self) -> None:
+        from adloop.runtime import deployment_mode
+
+        if deployment_mode() == "server":
+            raise RuntimeError(
+                "LocalFileCredentialsProvider cannot be used in server mode. "
+                "The hosted deployment must install its own provider via "
+                "adloop.auth.set_credentials_provider() at startup."
+            )
+
+    def ga4_credentials(self, config: AdLoopConfig) -> Credentials:
+        self._guard_local_only()
+        return _local_credentials(config, _GA4_SCOPES)
+
+    def ads_credentials(self, config: AdLoopConfig) -> Credentials:
+        self._guard_local_only()
+        return _local_credentials(config, _ADS_SCOPES)
+
+
+_active_provider: CredentialsProvider = LocalFileCredentialsProvider()
+
+
+def set_credentials_provider(provider: CredentialsProvider) -> None:
+    """Swap the credentials provider (hosted deployments call this once)."""
+    global _active_provider
+    _active_provider = provider
+
+
+def get_credentials_provider() -> CredentialsProvider:
+    return _active_provider
+
+
+def get_ga4_credentials(config: AdLoopConfig) -> Credentials:
+    """Return authenticated credentials for GA4 APIs."""
+    return _active_provider.ga4_credentials(config)
+
+
+def get_ads_credentials(config: AdLoopConfig) -> Credentials:
+    """Return authenticated credentials for Google Ads API."""
+    return _active_provider.ads_credentials(config)
 
 
 def _get_credentials_path(config: AdLoopConfig) -> Path | None:
@@ -58,8 +126,8 @@ def _get_credentials_path(config: AdLoopConfig) -> Path | None:
     return None
 
 
-def get_ga4_credentials(config: AdLoopConfig) -> Credentials:
-    """Return authenticated credentials for GA4 APIs."""
+def _local_credentials(config: AdLoopConfig, scopes: list[str]) -> Credentials:
+    """Resolve credentials from local files (service account or OAuth)."""
     creds_path = _get_credentials_path(config)
 
     if creds_path is not None:
@@ -73,40 +141,14 @@ def get_ga4_credentials(config: AdLoopConfig) -> Credentials:
 
             return service_account.Credentials.from_service_account_file(
                 str(creds_path),
-                scopes=_GA4_SCOPES,
+                scopes=scopes,
             )
 
         return _oauth_flow(config, creds_path)
 
     import google.auth
 
-    credentials, _ = google.auth.default(scopes=_GA4_SCOPES)
-    return credentials
-
-
-def get_ads_credentials(config: AdLoopConfig) -> Credentials:
-    """Return authenticated credentials for Google Ads API."""
-    creds_path = _get_credentials_path(config)
-
-    if creds_path is not None:
-        import json
-
-        with open(creds_path) as f:
-            creds_info = json.load(f)
-
-        if creds_info.get("type") == "service_account":
-            from google.oauth2 import service_account
-
-            return service_account.Credentials.from_service_account_file(
-                str(creds_path),
-                scopes=_ADS_SCOPES,
-            )
-
-        return _oauth_flow(config, creds_path)
-
-    import google.auth
-
-    credentials, _ = google.auth.default(scopes=_ADS_SCOPES)
+    credentials, _ = google.auth.default(scopes=scopes)
     return credentials
 
 
@@ -119,7 +161,9 @@ def _oauth_flow(
     GA4 and Ads auth sharing the same token_path.
 
     Falls back to a manual copy-paste flow when no browser is available
-    (headless servers, Docker containers, SSH sessions).
+    (headless servers, Docker containers, SSH sessions) — but only when
+    attached to a real terminal; under a stdio MCP server stdin/stdout
+    belong to the JSON-RPC stream and must not be touched.
     """
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials as OAuthCredentials
@@ -172,12 +216,35 @@ def _oauth_flow(
     return creds
 
 
+def _is_interactive_terminal() -> bool:
+    """True when stdin AND stdout are real TTYs (a human at a terminal).
+
+    Under a stdio MCP server both are pipes carrying JSON-RPC frames —
+    printing prompts or reading input there corrupts the protocol stream.
+    """
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
 def _run_oauth_with_fallback(flow: object) -> Credentials:
     """Try browser-based OAuth; fall back to manual URL copy-paste for headless."""
+    interactive = _is_interactive_terminal()
     try:
-        return flow.run_local_server(port=0)  # type: ignore[union-attr]
+        # Suppress the library's stdout prompt unless a human terminal is
+        # attached — under stdio transport, stdout is the JSON-RPC stream.
+        kwargs = {} if interactive else {"authorization_prompt_message": ""}
+        return flow.run_local_server(port=0, **kwargs)  # type: ignore[union-attr]
     except Exception:
         pass
+
+    if not interactive:
+        raise RuntimeError(
+            "OAuth authorization is required but no browser could be opened "
+            "and no interactive terminal is attached. Run 'adloop init' in a "
+            "terminal to complete authorization, then retry."
+        )
 
     auth_url, _ = flow.authorization_url(prompt="consent")  # type: ignore[union-attr]
     print()

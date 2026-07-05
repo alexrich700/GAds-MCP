@@ -71,6 +71,79 @@ def _normalize_rsa_assets(items: list) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def _ssrf_error(url: str) -> str | None:
+    """Reject URLs that would make the validation fetch reach non-public hosts.
+
+    User-supplied URLs are fetched from the machine running AdLoop; on a
+    hosted multi-tenant server that request originates inside our network,
+    so private/loopback/link-local/metadata targets must be refused. Ads
+    pointing at such addresses could never serve anyway. Returns an error
+    string, or None if the URL looks safe to fetch.
+
+    Note: the fetch re-resolves DNS after this check, so a hostile DNS
+    server could still rebind between check and fetch — acceptable here
+    because the fetch result is only an up/down signal, never returned
+    to the caller.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except ValueError as e:
+        return f"unparseable URL: {e}"
+
+    if parsed.scheme not in ("http", "https"):
+        return f"unsupported URL scheme '{parsed.scheme}' (only http/https)"
+
+    host = parsed.hostname
+    if not host:
+        return "URL has no hostname"
+
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            addr_info = socket.getaddrinfo(host, None)
+        except OSError as e:
+            return f"hostname does not resolve: {e}"
+        addresses = [
+            ipaddress.ip_address(info[4][0]) for info in addr_info
+        ]
+
+    for addr in addresses:
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_multicast
+            or addr.is_reserved
+            or addr.is_unspecified
+        ):
+            return (
+                f"URL resolves to a non-public address ({addr}) — "
+                "refusing to fetch"
+            )
+
+    return None
+
+
+def _build_public_only_opener():
+    """Return a urllib opener that re-checks every redirect hop for SSRF."""
+    import urllib.error
+    import urllib.request
+
+    class _PublicOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            err = _ssrf_error(newurl)
+            if err is not None:
+                raise urllib.error.URLError(f"redirect blocked: {err}")
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    return urllib.request.build_opener(_PublicOnlyRedirectHandler)
+
+
 def _validate_urls(urls: list[str], timeout: int = 10) -> dict[str, str | None]:
     """Check that each URL returns a 2xx/3xx status.
 
@@ -79,14 +152,20 @@ def _validate_urls(urls: list[str], timeout: int = 10) -> dict[str, str | None]:
     import urllib.request
     import urllib.error
 
+    opener = _build_public_only_opener()
+
     results = {}
     for url in urls:
         if not url:
             continue
+        ssrf = _ssrf_error(url)
+        if ssrf is not None:
+            results[url] = ssrf
+            continue
         try:
             req = urllib.request.Request(url, method="HEAD")
             req.add_header("User-Agent", "AdLoop-URLCheck/1.0")
-            resp = urllib.request.urlopen(req, timeout=timeout)
+            resp = opener.open(req, timeout=timeout)
             if resp.status >= 400:
                 results[url] = f"HTTP {resp.status}"
             else:
@@ -97,7 +176,7 @@ def _validate_urls(urls: list[str], timeout: int = 10) -> dict[str, str | None]:
                 try:
                     req = urllib.request.Request(url, method="GET")
                     req.add_header("User-Agent", "AdLoop-URLCheck/1.0")
-                    resp = urllib.request.urlopen(req, timeout=timeout)
+                    resp = opener.open(req, timeout=timeout)
                     if resp.status >= 400:
                         results[url] = f"HTTP {resp.status}"
                     else:
@@ -1221,8 +1300,18 @@ def draft_image_assets(
     image_paths: list[str] | None = None,
 ) -> dict:
     """Draft campaign image assets from local files."""
+    from adloop.runtime import deployment_mode
     from adloop.safety.guards import SafetyViolation, check_blocked_operation
     from adloop.safety.preview import ChangePlan, store_plan
+
+    if deployment_mode() == "server":
+        return {
+            "error": (
+                "draft_image_assets reads image files from the local "
+                "filesystem and is not available on the hosted server. "
+                "Use the self-hosted AdLoop MCP server for image assets."
+            )
+        }
 
     try:
         check_blocked_operation("create_image_assets", config.safety)

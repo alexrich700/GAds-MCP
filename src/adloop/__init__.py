@@ -42,6 +42,15 @@ def main() -> None:
             sys.exit(130)
         return
 
+    # Process-global side effects (signal handlers, heartbeat thread, and
+    # the stdio cancellation-race monkeypatch) are deliberately installed
+    # here — in the stdio entry point — rather than at adloop.server import
+    # time, so embedding the server in an ASGI app stays side-effect-free.
+    from adloop import _mcp_patches, diagnostics
+
+    diagnostics.install()
+    _mcp_patches.install()
+
     from adloop.server import mcp
 
     mcp.run()

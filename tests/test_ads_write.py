@@ -96,9 +96,9 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def clear_pending_plans():
-    preview_store._pending_plans.clear()
+    preview_store.set_plan_store(preview_store.InMemoryPlanStore())
     yield
-    preview_store._pending_plans.clear()
+    preview_store.set_plan_store(preview_store.InMemoryPlanStore())
 
 
 @pytest.fixture
@@ -923,7 +923,7 @@ class TestProposeNegativeKeywordList:
         )
         plan_id = result["plan_id"]
         from adloop.safety import preview as preview_store
-        assert plan_id in preview_store._pending_plans
+        assert preview_store.get_plan(plan_id) is not None
 
 
 class TestAddToNegativeKeywordList:
@@ -1019,7 +1019,7 @@ class TestAddToNegativeKeywordList:
             shared_set_id="555",
             keywords=["free trial"],
         )
-        assert result["plan_id"] in preview_store._pending_plans
+        assert preview_store.get_plan(result["plan_id"]) is not None
 
 
 class TestApplyAddToNegativeKeywordList:
