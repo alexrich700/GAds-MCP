@@ -21,8 +21,9 @@ uv.lock
 docs/
 
 # IDE
-.idea/
+.idea/3
 .vscode/
+*.code-workspace
 
 # Cursor MCP config (contains local paths)
 .cursor/mcp.json
