@@ -89,7 +89,29 @@ _GAQL_ERROR_HINTS = {
 
 
 def _parse_gaql_error(exc: Exception) -> str:
-    """Extract a human-readable message from Google Ads gRPC errors."""
+    """Extract a human-readable message from Google Ads gRPC errors.
+
+    Prefers the structured ``failure.errors[]`` a GoogleAdsException
+    carries — Google's own message names the exact field/clause at
+    fault (e.g. PROHIBITED_FIELD_IN_SELECT_CLAUSE with the field name),
+    which is far more actionable than a generic hint. Known error codes
+    still get the hint appended as a suffix.
+    """
+    failure = getattr(exc, "failure", None)
+    errors = getattr(failure, "errors", None) if failure is not None else None
+    if errors:
+        parts = []
+        for err in errors:
+            code = str(getattr(err, "error_code", "") or "").strip()
+            message = str(getattr(err, "message", "") or "").strip()
+            parts.append(" — ".join(p for p in (code, message) if p))
+        detail = " | ".join(p for p in parts if p)
+        if detail:
+            for known, hint in _GAQL_ERROR_HINTS.items():
+                if known in detail:
+                    return f"{detail} (hint: {hint})"
+            return detail
+
     raw = str(exc)
     for code, hint in _GAQL_ERROR_HINTS.items():
         if code in raw:
@@ -137,6 +159,21 @@ def _to_python(obj: object) -> object:
     # AdTextAsset and similar message types
     if hasattr(obj, "text") and isinstance(getattr(obj, "text", None), str):
         return obj.text
+    # Nested proto-plus messages (targeting settings, criteria, ...) —
+    # serialize to a dict instead of collapsing to their str() repr.
+    try:
+        import proto
+
+        if isinstance(obj, proto.Message):
+            return type(obj).to_dict(
+                obj, preserving_proto_field_name=True, use_integers_for_enums=False
+            )
+    except ImportError:
+        pass
+    if hasattr(obj, "DESCRIPTOR"):
+        from google.protobuf.json_format import MessageToDict
+
+        return MessageToDict(obj, preserving_proto_field_name=True)
     return str(obj)
 
 
