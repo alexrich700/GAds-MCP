@@ -19,9 +19,8 @@ src/adloop/
 ├── __init__.py        # Entry point — routes 'adloop init' vs MCP server
 ├── server.py          # FastMCP server — 43 tool registrations
 ├── config.py          # Config loader (~/.adloop/config.yaml)
-├── auth.py            # OAuth 2.0 (bundled + custom creds, headless fallback) + service accounts
-├── cli.py             # Interactive setup wizard (auto-discovery, bundled/custom mode fork)
-├── bundled_credentials.json  # Built-in OAuth client for zero-GCP setup
+├── auth.py            # OAuth 2.0 (user-supplied credentials, headless fallback) + service accounts
+├── cli.py             # Interactive setup wizard (own Google Cloud project + auto-discovery)
 ├── crossref.py        # Cross-reference tools (GA4 + Ads combined)
 ├── tracking.py        # Tracking validation + code generation
 ├── ga4/               # GA4 Data + Admin API (reports, realtime, events)

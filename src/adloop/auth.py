@@ -11,7 +11,6 @@ the active provider.
 
 from __future__ import annotations
 
-import importlib.resources
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -102,9 +101,8 @@ def _get_credentials_path(config: AdLoopConfig) -> Path | None:
     """Resolve OAuth client credentials using a priority chain.
 
     1. User-provided credentials_path in config (if non-empty and file exists)
-    2. ~/.adloop/credentials.json (if file exists — legacy or manually placed)
-    3. Bundled credentials shipped with the package
-    4. None (caller falls back to Application Default Credentials)
+    2. ~/.adloop/credentials.json (if file exists — the wizard's default spot)
+    3. None (caller falls back to Application Default Credentials)
     """
     if config.google.credentials_path:
         user_path = Path(config.google.credentials_path).expanduser()
@@ -114,14 +112,6 @@ def _get_credentials_path(config: AdLoopConfig) -> Path | None:
     local_path = Path("~/.adloop/credentials.json").expanduser()
     if local_path.exists():
         return local_path
-
-    try:
-        ref = importlib.resources.files("adloop").joinpath("bundled_credentials.json")
-        with importlib.resources.as_file(ref) as bundled:
-            if bundled.exists():
-                return Path(bundled)
-    except (FileNotFoundError, TypeError):
-        pass
 
     return None
 
@@ -148,7 +138,15 @@ def _local_credentials(config: AdLoopConfig, scopes: list[str]) -> Credentials:
 
     import google.auth
 
-    credentials, _ = google.auth.default(scopes=scopes)
+    try:
+        credentials, _ = google.auth.default(scopes=scopes)
+    except Exception as exc:
+        raise RuntimeError(
+            "No Google OAuth credentials found. Run `adloop init` to set up "
+            "your own Google Cloud project, or place your OAuth client JSON "
+            "at ~/.adloop/credentials.json. Prefer zero setup? AdLoop Cloud "
+            "handles credentials for you: https://getadloop.com"
+        ) from exc
     return credentials
 
 

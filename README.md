@@ -172,12 +172,11 @@ AdLoop manages real ad spend, so safety is not optional.
 
 ## Setup
 
-> **⚠️ Built-in OAuth credentials are temporarily unavailable while Google verification is pending.**
-> Google limits unverified OAuth apps to 100 users, and AdLoop has reached that cap. New users will see a **"This app is blocked"** error if they pick the built-in option in the wizard.
+> **AdLoop uses your own (free) Google Cloud project for OAuth.** The `adloop init` wizard walks you through it — a one-time setup of about 5 minutes, with no shared user caps and no waiting on anyone's verification review. AdLoop does not ship built-in OAuth credentials.
 >
-> **What this means for you:** until Google completes verification, **bring your own Google Cloud project** — it takes ~5 minutes, has no user cap, and the `adloop init` wizard guides you through it. Status updates: [Discussion #13](https://github.com/kLOsk/adloop/discussions/13).
+> **Prefer zero setup?** [**AdLoop Cloud**](https://getadloop.com) is the hosted version: connect Google in two clicks — no Cloud project, no developer token, EU-hosted.
 >
-> *(Existing users whose tokens were already issued before the cap continue to work — only first-time sign-ins are blocked.)*
+> *(Upgrading from ≤0.9 with built-in credentials? Those sign-ins were retired in 0.10 — run `adloop init` once to switch to your own project.)*
 
 ### Install
 
@@ -199,7 +198,7 @@ uv run adloop init
 
 ### What `adloop init` does
 
-The wizard defaults to the "bring your own Google Cloud project" path while verification is pending. It walks you through:
+The wizard walks you through:
 
 1. **Google Cloud setup** — creates a project, enables the three APIs, generates an OAuth client (see [Custom Google Cloud Project Setup](#custom-google-cloud-project-setup) below for the exact steps the wizard refers you to)
 2. **Developer token** — from your Google Ads MCC ([API Center](https://ads.google.com/aw/apicenter))
@@ -209,8 +208,6 @@ The wizard defaults to the "bring your own Google Cloud project" path while veri
 6. **Safety defaults** — budget cap and dry-run preference
 7. **Editor config snippets** — prints MCP configuration for both Cursor and Claude Code
 
-The wizard does still offer AdLoop's built-in credentials as a non-default option for existing users whose tokens predate the cap. Picking that option for a brand-new Google account will fail at the consent screen — the wizard warns you about this before you choose.
-
 ### Requirements
 
 - Python 3.11+
@@ -219,7 +216,7 @@ The wizard does still offer AdLoop's built-in credentials as a non-default optio
 
 ### Google Ads Developer Token
 
-A developer token is **always required** — even when using AdLoop's built-in OAuth credentials. The built-in credentials handle Google sign-in; the developer token is a separate key that grants API access to your Google Ads data.
+A developer token is **always required**. Your OAuth client handles Google sign-in; the developer token is a separate key that grants API access to your Google Ads data.
 
 1. **Create an MCC** (free) at [ads.google.com/home/tools/manager-accounts](https://ads.google.com/home/tools/manager-accounts/) if you don't have one. Link your regular Google Ads account to it.
 2. In the MCC, go to **Tools & Settings → API Center**
@@ -241,7 +238,7 @@ Running on a server without a browser (VMs, Docker, SSH)? The wizard automatical
 
 ### Custom Google Cloud Project Setup
 
-This is the default path while built-in credentials are blocked by Google's 100-user cap. The wizard refers to these steps — do them in your browser before running `adloop init` (or while it waits at the OAuth prompt).
+The wizard refers to these steps — do them in your browser before running `adloop init` (or while it waits at the OAuth prompt).
 
 #### Step 1 — Google Cloud Project
 
@@ -334,7 +331,7 @@ All configuration lives in `~/.adloop/config.yaml`. See [`config.yaml.example`](
 | Section | Key | Default | Description |
 |---------|-----|---------|-------------|
 | `google` | `project_id` | *(empty)* | Google Cloud project ID (only needed with custom credentials) |
-| `google` | `credentials_path` | *(empty — uses built-in)* | Path to OAuth client JSON or service account key. Leave empty to use AdLoop's built-in credentials. |
+| `google` | `credentials_path` | *(empty)* | Path to OAuth client JSON or service account key. Empty = `~/.adloop/credentials.json`, else Application Default Credentials. |
 | `google` | `token_path` | `~/.adloop/token.json` | Where to store the OAuth token (auto-created) |
 | `ga4` | `property_id` | — | Your GA4 property ID (auto-discovered by `adloop init`) |
 | `ads` | `developer_token` | — | Your Google Ads API developer token |
@@ -351,7 +348,7 @@ src/adloop/
 ├── __init__.py        # Entry point — routes 'adloop init' to wizard, otherwise starts MCP server
 ├── server.py          # FastMCP server — 43 tool registrations with safety annotations
 ├── config.py          # Config loader (~/.adloop/config.yaml)
-├── auth.py            # OAuth 2.0 flow (bundled + custom credentials, headless fallback) + service accounts
+├── auth.py            # OAuth 2.0 flow (user-supplied credentials, headless fallback) + service accounts
 ├── cli.py             # Interactive 'adloop init' setup wizard
 ├── crossref.py        # Cross-reference tools (GA4 + Ads combined analysis)
 ├── tracking.py        # Tracking validation + code generation tools
@@ -387,7 +384,7 @@ What's been shipped and what's next:
 - ~~Claude Code support~~ ✓ — `CLAUDE.md`, `.mcp.json`, `.claude/rules/`, `.claude/commands/`, CLI wizard snippets
 - **Claude Desktop one-click install** — `adloop install claude-desktop` (and/or a `.dxt` extension bundle) that writes the AdLoop MCP entry into `claude_desktop_config.json` automatically, so Claude Desktop + Cowork users don't have to hand-edit JSON
 - ~~PyPI package~~ ✓ — `pip install adloop`
-- ~~Bundled OAuth credentials~~ ✓ — no Google Cloud project required (**currently blocked at 100-user cap** pending Google verification; `adloop init` defaults to the [Custom Google Cloud Project Setup](#custom-google-cloud-project-setup) path until verification completes)
+- **[AdLoop Cloud](https://getadloop.com)** — the hosted version: no Google Cloud project, no developer token, connect Google in two clicks (EU-hosted, GDPR-first)
 - ~~Headless server support~~ ✓ — manual URL copy-paste flow for servers without a browser
 - ~~Behavioral eval suites~~ ✓ — 28 prompt-and-expectation tests covering read, write, tracking, and planning workflows
 - **Community launch** — HN, Indie Hackers, r/cursor, Twitter

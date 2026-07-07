@@ -49,8 +49,8 @@ class TestGenerateConfigYaml:
         parsed = yaml.safe_load(text)
         assert parsed["google"]["credentials_path"] == weird_path
 
-    def test_no_credentials_path_uses_bundled_comment(self):
+    def test_no_credentials_path_comment(self):
         text = self._generate(credentials_path="")
-        assert "Using built-in credentials" in text
+        assert "credentials_path resolved from" in text
         parsed = yaml.safe_load(text)
         assert "credentials_path" not in parsed.get("google", {})

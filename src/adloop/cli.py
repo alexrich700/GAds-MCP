@@ -167,7 +167,7 @@ def _generate_config_yaml(
         escaped = credentials_path.replace("'", "''")
         lines.append(f"  credentials_path: '{escaped}'")
     else:
-        lines.append("  # Using built-in credentials (no credentials_path needed)")
+        lines.append("  # credentials_path resolved from ~/.adloop/credentials.json or ADC")
     lines.append('  token_path: "~/.adloop/token.json"')
     lines += [
         "",
@@ -318,56 +318,34 @@ def run_init_wizard() -> None:
             return str(existing_config[section].get(key, fallback))
         return fallback
 
-    # Step 1: Credentials mode
+    # Step 1: Google Cloud project
     #
-    # We used to default to AdLoop's bundled OAuth credentials (zero-GCP
-    # setup, "Use built-in credentials? (recommended)" Y/N with Y as default).
-    # That stopped being safe once Google's 100-user cap on unverified OAuth
-    # apps was reached — new users picking the bundled option now hit a
-    # "This app is blocked" error at the consent screen, leaving them
-    # stranded mid-wizard with no path forward.
-    #
-    # Until Google completes verification, the wizard defaults to the
-    # "bring your own Google Cloud project" path (which has no cap and
-    # works immediately) and only offers the bundled path as an opt-in
-    # for existing users whose tokens predate the cap. We surface the
-    # status explicitly so people understand WHY the default flipped
-    # rather than wondering whether the wizard is broken.
-    _step_header(1, "Google Credentials")
-    _print("  ⚠  AdLoop's built-in Google OAuth is currently blocked at")
-    _print("     Google's 100-user cap (pending OAuth verification).")
-    _print("     New sign-ins will fail with \"This app is blocked\".")
-    _print("     Status: https://github.com/kLOsk/adloop/discussions/13")
+    # AdLoop no longer ships OAuth credentials. Every install brings its
+    # own Google Cloud project: no shared user caps, no dependency on a
+    # central verification review, and the consent screen shows YOUR
+    # project to YOUR account. The hosted zero-setup alternative is
+    # AdLoop Cloud (https://getadloop.com).
+    _step_header(1, "Google Cloud Project")
+    _print("  AdLoop uses your own (free) Google Cloud project for OAuth —")
+    _print("  a one-time setup of about 5 minutes.")
+    _print("  Prefer zero setup? AdLoop Cloud handles Google credentials")
+    _print("  for you: https://getadloop.com")
     _print()
-    _print("  The wizard will set you up with your own Google Cloud")
-    _print("  project instead — takes ~5 minutes, no cap, works today.")
-    _print()
-    use_bundled = _prompt_bool(
-        "Use built-in credentials anyway? (only works if you already "
-        "authorized AdLoop before the cap)",
-        default=False,
+    _print(_GOOGLE_CLOUD_INSTRUCTIONS)
+    input("  Press Enter when you've completed the steps above...")
+
+    _step_header(2, "OAuth Credentials")
+    credentials_path = _prompt_credentials_path(
+        default=_existing("google", "credentials_path", "~/.adloop/credentials.json")
     )
 
-    credentials_path = ""
-    project_id = ""
-    if not use_bundled:
-        _print()
-        _print(_GOOGLE_CLOUD_INSTRUCTIONS)
-        input("  Press Enter when you've completed the steps above...")
+    _step_header(3, "Google Cloud Project ID")
+    project_id = _prompt(
+        "Google Cloud Project ID",
+        default=_existing("google", "project_id"),
+    )
 
-        _step_header(2, "OAuth Credentials")
-        credentials_path = _prompt_credentials_path(
-            default=_existing("google", "credentials_path", "~/.adloop/credentials.json")
-        )
-
-        _step_header(3, "Google Cloud Project")
-        project_id = _prompt(
-            "Google Cloud Project ID",
-            default=_existing("google", "project_id"),
-        )
-
-    # Developer token (both paths need this)
-    step_num = 2 if use_bundled else 4
+    step_num = 4
     _step_header(step_num, "Google Ads Developer Token")
     _print("  Find your developer token in your MCC account:")
     _print("  → https://ads.google.com/aw/apicenter")
@@ -411,7 +389,6 @@ def run_init_wizard() -> None:
     # the temp) so we never leave a half-baked config on disk.
     try:
         _run_wizard_post_config(
-            use_bundled=use_bundled,
             credentials_path=credentials_path,
             project_id=project_id,
             developer_token=developer_token,
@@ -429,7 +406,6 @@ def run_init_wizard() -> None:
 
 def _run_wizard_post_config(
     *,
-    use_bundled: bool,
     credentials_path: str,
     project_id: str,
     developer_token: str,
@@ -441,7 +417,7 @@ def _run_wizard_post_config(
     from adloop.config import load_config
 
     # Optional: copy custom credentials to ~/.adloop/
-    if not use_bundled and credentials_path:
+    if credentials_path:
         creds_expanded = Path(credentials_path).expanduser()
         adloop_creds = _ADLOOP_DIR / "credentials.json"
         if creds_expanded != adloop_creds and creds_expanded.exists():

@@ -12,7 +12,7 @@ import yaml
 @dataclass
 class GoogleConfig:
     project_id: str = ""
-    credentials_path: str = ""  # empty = use bundled credentials shipped with the package
+    credentials_path: str = ""  # empty = ~/.adloop/credentials.json, else Application Default Credentials
     token_path: str = "~/.adloop/token.json"
 
 
