@@ -378,6 +378,20 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 4. For PMax campaigns, note that audience targeting is automatic — audience performance data may not appear in the `ad_group_audience_view` report. Audience signals in PMax are configured at the asset group level and serve as hints, not hard targeting.
 5. For Display/Search campaigns with explicit audience overlays, use the data to recommend bid adjustments or audience exclusions
 
+**Audience type ↔ campaign type compatibility.** Not every audience type can be attached to every campaign type — check this BEFORE proposing audience targeting, and use it to explain empty `custom_audience` joins:
+
+| Audience type | Search | Display | Video (YouTube) | Performance Max |
+|---|---|---|---|---|
+| Remarketing / your-data lists | ✓ (targeting or observation) | ✓ | ✓ | signal only |
+| In-market segments | ✓ | ✓ | ✓ | signal only |
+| Affinity segments | ✓ | ✓ | ✓ | signal only |
+| Custom segments (custom intent/affinity) | ✗ NOT attachable | ✓ | ✓ | signal only |
+| Combined segments | ✓ | ✗ | ✗ | ✗ |
+| Detailed demographics | ✓ | ✓ | ✓ | signal only |
+
+- **Custom segments cannot be attached to Search campaigns.** A GAQL join of `custom_audience` against Search campaigns will always come back empty — that is expected, not missing data. Don't propose custom segments for Search; suggest in-market/affinity or remarketing lists instead.
+- **PMax never takes hard audience targeting.** Every audience there is an asset-group-level signal — a hint to the algorithm, not a filter.
+
 ## Default Parameters
 
 When the user doesn't specify:
