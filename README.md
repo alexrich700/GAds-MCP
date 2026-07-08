@@ -14,11 +14,30 @@
 
 An MCP server that gives your AI assistant read + write access to Google Ads and GA4 — with safety guardrails that prevent accidental spend.
 
-`pip install adloop`
+**[☁️ Skip the setup — use AdLoop Cloud (free beta)](https://getadloop.com)** &nbsp;·&nbsp; or self-host: `pip install adloop`
 
 </div>
 
+> [!TIP]
+> **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the same 43 tools from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
+
 ---
+
+## Cloud or Self-Hosted?
+
+Both versions run the same 43 tools with the same safety model. The difference is who handles the plumbing:
+
+|  | ☁️ [AdLoop Cloud](https://getadloop.com) | 🛠️ Self-hosted (this repo) |
+|---|---|---|
+| **Setup** | Connect Google in two clicks | ~5 min: own Google Cloud project + `adloop init` |
+| **Google Cloud project** | Not needed | Required (free) |
+| **Ads developer token** | Not needed | Required (from your MCC) |
+| **Works with** | claude.ai, ChatGPT, Claude Code, Cursor, Gemini | Claude Code, Cursor, Claude Desktop, any local MCP client |
+| **Where your data flows** | EU servers (Germany), GDPR-first, DPA included | 100% your machine — nothing leaves it |
+| **Updates** | Automatic | `pip install -U adloop` |
+| **Price** | Free during beta | Free forever (MIT) |
+
+**Not sure? [Start with Cloud](https://getadloop.com)** — it's the fastest way to see what AdLoop can do, and it's the only way to use AdLoop from claude.ai or ChatGPT. Self-host when you want everything on your own machine or need to modify the code. And if you're here to hack on AdLoop itself: welcome, keep scrolling.
 
 ## What It Solves
 
@@ -44,7 +63,7 @@ The best features come from real workflows. If you're using AdLoop and find your
 
 ## All 43 Tools
 
-> **Quick start:** `pip install adloop` or `git clone https://github.com/kLOsk/adloop.git && cd adloop && uv sync && uv run adloop init`
+> **Quick start:** `pip install adloop` or `git clone https://github.com/kLOsk/adloop.git && cd adloop && uv sync && uv run adloop init` — or zero setup on [AdLoop Cloud](https://getadloop.com)
 
 ### Diagnostics
 
@@ -384,7 +403,7 @@ What's been shipped and what's next:
 - ~~Claude Code support~~ ✓ — `CLAUDE.md`, `.mcp.json`, `.claude/rules/`, `.claude/commands/`, CLI wizard snippets
 - **Claude Desktop one-click install** — `adloop install claude-desktop` (and/or a `.dxt` extension bundle) that writes the AdLoop MCP entry into `claude_desktop_config.json` automatically, so Claude Desktop + Cowork users don't have to hand-edit JSON
 - ~~PyPI package~~ ✓ — `pip install adloop`
-- **[AdLoop Cloud](https://getadloop.com)** — the hosted version: no Google Cloud project, no developer token, connect Google in two clicks (EU-hosted, GDPR-first)
+- ~~[AdLoop Cloud](https://getadloop.com)~~ ✓ — the hosted version, live in beta: no Google Cloud project, no developer token, connect Google in two clicks (EU-hosted, GDPR-first)
 - ~~Headless server support~~ ✓ — manual URL copy-paste flow for servers without a browser
 - ~~Behavioral eval suites~~ ✓ — 28 prompt-and-expectation tests covering read, write, tracking, and planning workflows
 - **Community launch** — HN, Indie Hackers, r/cursor, Twitter
@@ -400,14 +419,14 @@ MIT — see [LICENSE](LICENSE).
 
 ## Privacy
 
-AdLoop runs entirely on your machine. No data is collected, stored, or transmitted to any server. See [PRIVACY.md](PRIVACY.md) for the full privacy policy.
+The open-source version runs entirely on your machine. No data is collected, stored, or transmitted to any server. See [PRIVACY.md](PRIVACY.md) for the full privacy policy. AdLoop Cloud has its own [privacy policy](https://getadloop.com/datenschutz) and [DPA](https://getadloop.com/avv).
 
 ---
 
 <div align="center">
 
-**If AdLoop helps you run Google Ads, GA4, and tracking code from one place — [give it a star](https://github.com/kLOsk/adloop).**
+**If AdLoop helps you run Google Ads, GA4, and tracking code from one place — [give it a star](https://github.com/kLOsk/adloop) or [try the hosted version](https://getadloop.com).**
 
-Made by [@kLOsk](https://github.com/kLOsk) | [Privacy Policy](PRIVACY.md)
+Made by [@kLOsk](https://github.com/kLOsk) | [AdLoop Cloud](https://getadloop.com) | [Privacy Policy](PRIVACY.md)
 
 </div>
