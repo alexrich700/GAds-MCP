@@ -56,3 +56,6 @@ src/adloop/_debug_tools.py
 # Local stderr capture from Cowork / Claude Desktop sessions
 adloop-cowork.log
 adloop-cowork.log.*
+
+# Machine-local Claude Code context
+CLAUDE.local.md
