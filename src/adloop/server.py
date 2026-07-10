@@ -1099,8 +1099,8 @@ def add_negative_locations(
     from adloop.ads.write import add_negative_locations as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         campaign_id=campaign_id,
         geo_target_ids=geo_target_ids,
     )

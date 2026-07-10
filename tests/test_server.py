@@ -231,3 +231,55 @@ class TestListParamJsonStringCoercionEndToEnd:
         model_cls = self._model_with_str_list()
         m = model_cls(required=["a", "b"])
         assert m.required == ["a", "b"]
+
+
+class TestNoStaleModuleConfig:
+    """The multi-tenant runtime refactor removed the module-level ``_config``
+    global from server.py — every tool must resolve config per-call via
+    ``current_config()``. A contribution written against the old architecture
+    merges textually clean and then NameErrors at call time (swallowed into an
+    error dict by ``_safe``), which is exactly how add_negative_locations
+    shipped broken. Guard the whole class of bug statically, plus one
+    behavioral call-through of the affected tool.
+    """
+
+    def test_server_module_has_no_stale_config_references(self):
+        import inspect
+        import re
+
+        import adloop.server as server_module
+
+        source = inspect.getsource(server_module)
+        stale = [
+            f"line {source[: m.start()].count(chr(10)) + 1}"
+            for m in re.finditer(r"(?<![A-Za-z0-9_])_config\b", source)
+        ]
+        assert not stale, (
+            "server.py references the removed module-level _config global at "
+            f"{', '.join(stale)}; use current_config() instead"
+        )
+
+    @pytest.mark.asyncio
+    async def test_add_negative_locations_tool_resolves_runtime_config(self):
+        from adloop import runtime
+        from adloop.config import AdLoopConfig, AdsConfig, SafetyConfig
+        from adloop.safety import preview as preview_store
+        from adloop.safety.preview import InMemoryPlanStore
+        from adloop.server import mcp
+
+        preview_store.set_plan_store(InMemoryPlanStore())
+        runtime.set_default_config(
+            AdLoopConfig(
+                ads=AdsConfig(customer_id="123-456-7890"),
+                safety=SafetyConfig(require_dry_run=True),
+            )
+        )
+        try:
+            tool = await mcp.get_tool("add_negative_locations")
+            result = tool.fn(campaign_id="1001", geo_target_ids=["2840"])
+            assert "error" not in result, result.get("error")
+            assert result["operation"] == "add_negative_locations"
+            assert result["plan_id"]
+        finally:
+            runtime.set_default_config(None)
+            preview_store.set_plan_store(InMemoryPlanStore())
