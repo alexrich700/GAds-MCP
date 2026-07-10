@@ -19,13 +19,13 @@ An MCP server that gives your AI assistant read + write access to Google Ads and
 </div>
 
 > [!TIP]
-> **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the same 47 tools from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
+> **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the same 49 tools from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
 
 ---
 
 ## Cloud or Self-Hosted?
 
-Both versions run the same 47 tools with the same safety model. The difference is who handles the plumbing:
+Both versions run the same 49 tools with the same safety model. The difference is who handles the plumbing:
 
 |  | ☁️ [AdLoop Cloud](https://getadloop.com) | 🛠️ Self-hosted (this repo) |
 |---|---|---|
@@ -61,7 +61,7 @@ Every tool exists because of an actual problem hit while running real Google Ads
 
 The best features come from real workflows. If you're using AdLoop and find yourself wishing it could do something it can't, **open an issue describing your situation** — not just "add feature X" but "I was trying to do Y and couldn't because Z." The context matters more than the request.
 
-## All 43 Tools
+## All 49 Tools
 
 > **Quick start:** `pip install adloop` or `git clone https://github.com/kLOsk/adloop.git && cd adloop && uv sync && uv run adloop init` — or zero setup on [AdLoop Cloud](https://getadloop.com)
 
@@ -98,6 +98,7 @@ The best features come from real workflows. If you're using AdLoop and find your
 | `get_asset_performance` | Per-asset details for PMax — field type, serving status, content |
 | `get_detailed_asset_performance` | Top-performing asset combinations — which headline+description+image combos Google selects most |
 | `get_audience_performance` | Audience segment performance — remarketing, in-market, affinity, demographics |
+| `get_demographic_targeting` | List demographic criteria (age/gender/parental status/income) on an ad group or campaign |
 | `run_gaql` | Arbitrary GAQL queries for anything else |
 
 ### Cross-Reference Tools (GA4 + Ads Combined)
@@ -141,6 +142,7 @@ All write operations follow a **draft → preview → confirm** workflow. Nothin
 | `draft_keywords` | Propose keyword additions with match types. Proactively checks bidding strategy — blocks BROAD match on Manual CPC campaigns. |
 | `add_negative_keywords` | Propose negative keywords directly on a campaign |
 | `add_negative_locations` | Propose negative geo exclusions on a campaign — exclude cities/regions while keeping broader positive targets |
+| `draft_demographic_targeting` | Propose demographic criteria (age, gender, parental status, income) — exclusions by default |
 | `propose_negative_keyword_list` | Draft a shared negative keyword list (SharedSet) and attach it to a campaign — reusable across multiple campaigns |
 | `pause_entity` | Pause a campaign, ad group, ad, or keyword |
 | `enable_entity` | Re-enable a paused entity |
@@ -366,7 +368,7 @@ All configuration lives in `~/.adloop/config.yaml`. See [`config.yaml.example`](
 ```
 src/adloop/
 ├── __init__.py        # Entry point — routes 'adloop init' to wizard, otherwise starts MCP server
-├── server.py          # FastMCP server — 47 tool registrations with safety annotations
+├── server.py          # FastMCP server — 49 tool registrations with safety annotations
 ├── config.py          # Config loader (~/.adloop/config.yaml)
 ├── auth.py            # OAuth 2.0 flow (user-supplied credentials, headless fallback) + service accounts
 ├── cli.py             # Interactive 'adloop init' setup wizard

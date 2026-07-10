@@ -414,6 +414,8 @@ Most websites (especially in the EU) use a GDPR cookie consent banner. This has 
 **Common pitfalls:**
 - "Audiences" and "demographics" mean different things in Google Ads. Audiences are user lists (remarketing, in-market, affinity) — use `get_audience_performance` and audience-targeting tools. Demographics are age/gender/parental/income — use `get_demographic_targeting` and `draft_demographic_targeting`. If the user says "exclude audiences" but describes ages, they mean demographics.
 - Excluding many segments within a single dimension drastically reduces reach. The tool will warn when you exclude nearly all values in one dimension.
+- **Excluding UNDETERMINED is almost never what the user wants.** Google cannot classify a large share of users (often 30%+, more under EU consent restrictions); excluding UNDETERMINED blocks all of them, far beyond the named segment. The tool warns — surface that warning prominently and confirm intent before applying.
+- Campaign-level demographic criteria can only be EXCLUSIONS. Positive (narrowing) demographic targeting must go on an ad group — the tool rejects `campaign_id` + `negative=False`.
 - Demographic exclusions are ad-serving filters, not bid modifiers. To raise or lower bids for a demographic, use bid adjustments (not currently exposed as a dedicated tool — use `run_gaql` and the Google Ads UI).
 
 ## Default Parameters
