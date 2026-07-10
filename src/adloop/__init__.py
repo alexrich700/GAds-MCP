@@ -1,8 +1,12 @@
 """AdLoop — MCP server connecting Google Ads + GA4 + codebase."""
 
 import sys
+from importlib.metadata import PackageNotFoundError, version
 
-__version__ = "0.9.0"
+try:
+    __version__ = version("adloop")
+except PackageNotFoundError:  # running from a source tree without install
+    __version__ = "0.0.0.dev0"
 
 
 def main() -> None:
