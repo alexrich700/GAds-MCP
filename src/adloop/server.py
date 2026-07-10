@@ -54,6 +54,9 @@ _DictList = Annotated[list[dict], BeforeValidator(_coerce_json_string_to_list)]
 _DictListOpt = Annotated[
     list[dict] | None, BeforeValidator(_coerce_json_string_to_list)
 ]
+_StrOrDictList = Annotated[
+    list[str | dict], BeforeValidator(_coerce_json_string_to_list)
+]
 
 def _build_orchestration_instructions() -> str:
     """Compact orchestration hint sent via MCP ``InitializeResult.instructions``.
@@ -714,6 +717,34 @@ def get_audience_performance(
     )
 
 
+@mcp.tool(annotations=_READONLY)
+@_safe
+def get_demographic_targeting(
+    ad_group_id: str = "",
+    campaign_id: str = "",
+    customer_id: str = "",
+) -> dict:
+    """List demographic targeting criteria (age, gender, parental status, income).
+
+    Provide exactly one of `ad_group_id` or `campaign_id`. Returns each
+    criterion's value, whether it's negative (excluded) or positive
+    (narrowing), status, and a `remove_id` (composite resource ID) that
+    can be passed directly to `remove_entity` with
+    entity_type='ad_group_criterion' or 'campaign_criterion'.
+
+    By default, Google Ads serves ads to ALL demographic segments — a
+    criterion only appears here once you've actively excluded or narrowed.
+    """
+    from adloop.ads.read import get_demographic_targeting as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        ad_group_id=ad_group_id,
+        campaign_id=campaign_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Cross-Reference Tools (GA4 + Ads Combined)
 # ---------------------------------------------------------------------------
@@ -996,8 +1027,8 @@ def update_campaign(
 @_safe
 def draft_responsive_search_ad(
     ad_group_id: str,
-    headlines: list[str | dict],
-    descriptions: list[str | dict],
+    headlines: _StrOrDictList,
+    descriptions: _StrOrDictList,
     final_url: str,
     customer_id: str = "",
     path1: str = "",
@@ -1226,6 +1257,58 @@ def detach_shared_set_from_campaigns(
         customer_id=customer_id or current_config().ads.customer_id,
         shared_set_id=shared_set_id,
         campaign_ids=campaign_ids,
+    )
+
+
+@mcp.tool(annotations=_WRITE)
+@_safe
+def draft_demographic_targeting(
+    customer_id: str = "",
+    ad_group_id: str = "",
+    campaign_id: str = "",
+    # noqa: B006 — mutable default required for MCP JSON schema. Using
+    # `_StrList = []` produces a flat `{"type": "array", "default": []}`
+    # schema that naive MCP clients handle; `_StrListOpt = None` would
+    # produce an `anyOf: [array, null]` form that some clients ignore.
+    age_ranges: _StrList = [],  # noqa: B006
+    genders: _StrList = [],  # noqa: B006
+    parental_statuses: _StrList = [],  # noqa: B006
+    income_ranges: _StrList = [],  # noqa: B006
+    negative: bool = True,
+) -> dict:
+    """Draft demographic targeting (age/gender/parental status/income) — returns a PREVIEW.
+
+    By default, Google Ads serves to all demographic segments. This tool adds
+    criteria that EXCLUDE a segment (negative=True, default) or NARROW
+    targeting to it (negative=False — uncommon).
+
+    Provide exactly one of `ad_group_id` or `campaign_id`. At least one of
+    the four demographic lists must contain a value.
+
+    Accepted values:
+    - age_ranges: '18-24', '25-34', '35-44', '45-54', '55-64', '65+'.
+      Google's buckets are FIXED — 'Exclude 23-35' has no exact mapping;
+      ask the user which buckets to use.
+    - genders: 'female', 'male', 'undetermined'
+    - parental_statuses: 'parent', 'not_a_parent', 'undetermined'
+    - income_ranges: PERCENTILES (not currency). 'top-10', '11-20', '21-30',
+      '31-40', '41-50', 'lower-50', 'undetermined'. Available in select
+      countries only (US, AU, JP, etc.).
+
+    Call confirm_and_apply with the returned plan_id to execute.
+    """
+    from adloop.ads.write import draft_demographic_targeting as _impl
+
+    return _impl(
+        _config,
+        customer_id=customer_id or _config.ads.customer_id,
+        ad_group_id=ad_group_id,
+        campaign_id=campaign_id,
+        age_ranges=age_ranges,
+        genders=genders,
+        parental_statuses=parental_statuses,
+        income_ranges=income_ranges,
+        negative=negative,
     )
 
 
