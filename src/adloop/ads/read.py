@@ -65,6 +65,7 @@ def get_campaign_performance(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    compact: bool = False,
 ) -> dict:
     """Get campaign-level performance metrics for the given date range."""
     from adloop.ads.gaql import execute_query
@@ -87,7 +88,46 @@ def get_campaign_performance(
     currency_code = get_currency_code(config, customer_id)
     _enrich_cost_fields(rows, currency_code)
 
-    return {"campaigns": rows, "total_campaigns": len(rows)}
+    if not compact:
+        return {"campaigns": rows, "total_campaigns": len(rows)}
+
+    zero_conv = [
+        r for r in rows
+        if (r.get("metrics.cost_micros") or 0) > 0
+        and not (r.get("metrics.conversions") or 0)
+    ]
+    insights: list[str] = []
+    if zero_conv:
+        wasted = round(
+            sum((r.get("metrics.cost_micros") or 0) for r in zero_conv) / 1_000_000, 2
+        )
+        names = ", ".join(str(r.get("campaign.name")) for r in zero_conv[:5])
+        insights.append(
+            f"{len(zero_conv)} campaign(s) spent {wasted} {currency_code} with "
+            f"ZERO conversions: {names}. Investigate tracking and relevance "
+            f"before optimizing anything else."
+        )
+
+    top = rows[:10]
+    return {
+        "compact": True,
+        "total_campaigns": len(rows),
+        "totals": _compact_totals(rows, currency_code),
+        "by_status": _status_counts(rows, "campaign.status"),
+        "by_channel_type": _status_counts(rows, "campaign.advertising_channel_type"),
+        "campaigns_top_spend": top,
+        "zero_conversion_spenders": [
+            {
+                "name": r.get("campaign.name"),
+                "id": r.get("campaign.id"),
+                "cost": r.get("metrics.cost"),
+                "clicks": r.get("metrics.clicks"),
+            }
+            for r in zero_conv[:5]
+        ],
+        "insights": insights,
+        "note": _compact_note(len(top), len(rows), "get_campaign_performance"),
+    }
 
 
 def get_ad_performance(
@@ -96,6 +136,7 @@ def get_ad_performance(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    compact: bool = False,
 ) -> dict:
     """Get ad-level performance data including headlines, descriptions, and metrics."""
     from adloop.ads.gaql import execute_query
@@ -121,7 +162,85 @@ def get_ad_performance(
     currency_code = get_currency_code(config, customer_id)
     _enrich_cost_fields(rows, currency_code)
 
-    return {"ads": rows, "total_ads": len(rows)}
+    if not compact:
+        return {"ads": rows, "total_ads": len(rows)}
+
+    def _asset_count(row: dict, field: str) -> int:
+        assets = row.get(field) or []
+        return len(assets) if isinstance(assets, list) else 0
+
+    incomplete_rsas: list[dict] = []
+    ads_per_group: dict[str, dict] = {}
+    for r in rows:
+        group_key = str(r.get("ad_group.id"))
+        entry = ads_per_group.setdefault(
+            group_key, {"name": r.get("ad_group.name"), "enabled_ads": 0}
+        )
+        if str(r.get("ad_group_ad.status")) == "ENABLED":
+            entry["enabled_ads"] += 1
+
+        if str(r.get("ad_group_ad.ad.type")) == "RESPONSIVE_SEARCH_AD":
+            headlines = _asset_count(r, "ad_group_ad.ad.responsive_search_ad.headlines")
+            descriptions = _asset_count(
+                r, "ad_group_ad.ad.responsive_search_ad.descriptions"
+            )
+            if headlines < 8 or descriptions < 3:
+                incomplete_rsas.append({
+                    "ad_id": r.get("ad_group_ad.ad.id"),
+                    "ad_group": r.get("ad_group.name"),
+                    "headlines": headlines,
+                    "descriptions": descriptions,
+                })
+
+    single_ad_groups = [
+        {"ad_group": v["name"], "enabled_ads": v["enabled_ads"]}
+        for v in ads_per_group.values()
+        if v["enabled_ads"] == 1
+    ]
+
+    def _slim(row: dict) -> dict:
+        slim = {
+            k: v
+            for k, v in row.items()
+            if k not in (
+                "ad_group_ad.ad.responsive_search_ad.headlines",
+                "ad_group_ad.ad.responsive_search_ad.descriptions",
+                "ad_group_ad.ad.final_urls",
+            )
+        }
+        slim["headline_count"] = _asset_count(
+            row, "ad_group_ad.ad.responsive_search_ad.headlines"
+        )
+        slim["description_count"] = _asset_count(
+            row, "ad_group_ad.ad.responsive_search_ad.descriptions"
+        )
+        return slim
+
+    insights: list[str] = []
+    if incomplete_rsas:
+        insights.append(
+            f"{len(incomplete_rsas)} RSA(s) are below best practice (8+ headlines, "
+            f"3+ descriptions) — thin RSAs depress ad strength and CTR."
+        )
+    if single_ad_groups:
+        insights.append(
+            f"{len(single_ad_groups)} ad group(s) have only one enabled ad — "
+            f"Google cannot rotate or optimize with a single creative."
+        )
+
+    top = [_slim(r) for r in rows[:10]]
+    return {
+        "compact": True,
+        "total_ads": len(rows),
+        "totals": _compact_totals(rows, currency_code),
+        "by_status": _status_counts(rows, "ad_group_ad.status"),
+        "ads_top_spend": top,
+        "incomplete_rsas": incomplete_rsas[:10],
+        "single_ad_ad_groups": single_ad_groups[:10],
+        "insights": insights,
+        "note": _compact_note(len(top), len(rows), "get_ad_performance")
+        + " Compact rows replace full headline/description lists with counts.",
+    }
 
 
 def get_keyword_performance(
@@ -130,6 +249,7 @@ def get_keyword_performance(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    compact: bool = False,
 ) -> dict:
     """Get keyword metrics including quality scores and competitive data."""
     from adloop.ads.gaql import execute_query
@@ -154,7 +274,61 @@ def get_keyword_performance(
     currency_code = get_currency_code(config, customer_id)
     _enrich_cost_fields(rows, currency_code)
 
-    return {"keywords": rows, "total_keywords": len(rows)}
+    if not compact:
+        return {"keywords": rows, "total_keywords": len(rows)}
+
+    qs_field = "ad_group_criterion.quality_info.quality_score"
+    low_quality = [
+        r for r in rows
+        if r.get(qs_field) is not None and (r.get(qs_field) or 0) < 5
+    ]
+    zero_conv_spenders = [
+        r for r in rows
+        if (r.get("metrics.cost_micros") or 0) > 0
+        and not (r.get("metrics.conversions") or 0)
+    ]
+
+    def _kw(r: dict) -> dict:
+        return {
+            "keyword": r.get("ad_group_criterion.keyword.text"),
+            "match_type": r.get("ad_group_criterion.keyword.match_type"),
+            "quality_score": r.get(qs_field),
+            "cost": r.get("metrics.cost"),
+            "clicks": r.get("metrics.clicks"),
+            "conversions": r.get("metrics.conversions"),
+        }
+
+    insights: list[str] = []
+    if low_quality:
+        insights.append(
+            f"{len(low_quality)} keyword(s) have quality score < 5 — fix ad "
+            f"relevance and landing pages before adding keywords or budget."
+        )
+    if zero_conv_spenders:
+        wasted = round(
+            sum((r.get("metrics.cost_micros") or 0) for r in zero_conv_spenders)
+            / 1_000_000,
+            2,
+        )
+        insights.append(
+            f"{len(zero_conv_spenders)} keyword(s) spent {wasted} {currency_code} "
+            f"without converting."
+        )
+
+    top = rows[:10]
+    return {
+        "compact": True,
+        "total_keywords": len(rows),
+        "totals": _compact_totals(rows, currency_code),
+        "by_match_type": _status_counts(
+            rows, "ad_group_criterion.keyword.match_type"
+        ),
+        "keywords_top_spend": top,
+        "low_quality_score": [_kw(r) for r in low_quality[:10]],
+        "zero_conversion_spenders": [_kw(r) for r in zero_conv_spenders[:10]],
+        "insights": insights,
+        "note": _compact_note(len(top), len(rows), "get_keyword_performance"),
+    }
 
 
 def get_search_terms(
@@ -163,6 +337,7 @@ def get_search_terms(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    compact: bool = False,
 ) -> dict:
     """Get search terms report — what users actually typed before clicking ads."""
     from adloop.ads.gaql import execute_query
@@ -209,7 +384,59 @@ def get_search_terms(
     currency_code = get_currency_code(config, customer_id)
     _enrich_cost_fields(rows, currency_code)
 
-    return {"search_terms": rows, "total_search_terms": len(rows)}
+    if not compact:
+        return {"search_terms": rows, "total_search_terms": len(rows)}
+
+    def _term(r: dict) -> dict:
+        return {
+            "search_term": r.get("search_term_view.search_term"),
+            "campaign": r.get("campaign.name"),
+            "clicks": r.get("metrics.clicks"),
+            "cost": r.get("metrics.cost"),
+            "conversions": r.get("metrics.conversions"),
+        }
+
+    waste = sorted(
+        (
+            r for r in rows
+            if (r.get("metrics.clicks") or 0) >= 5
+            and not (r.get("metrics.conversions") or 0)
+        ),
+        key=lambda r: r.get("metrics.cost_micros") or 0,
+        reverse=True,
+    )
+    converters = sorted(
+        (r for r in rows if (r.get("metrics.conversions") or 0) > 0),
+        key=lambda r: r.get("metrics.conversions") or 0,
+        reverse=True,
+    )
+
+    insights: list[str] = []
+    if waste:
+        wasted_cost = round(
+            sum((r.get("metrics.cost_micros") or 0) for r in waste) / 1_000_000, 2
+        )
+        insights.append(
+            f"{len(waste)} search term(s) with 5+ clicks and zero conversions "
+            f"cost {wasted_cost} {currency_code} — negative-keyword candidates."
+        )
+    if converters:
+        insights.append(
+            f"{len(converters)} search term(s) converted — check whether the top "
+            f"converters exist as exact-match keywords yet."
+        )
+
+    top = rows[:10]
+    return {
+        "compact": True,
+        "total_search_terms": len(rows),
+        "totals": _compact_totals(rows, currency_code),
+        "search_terms_top_clicks": top,
+        "waste_candidates": [_term(r) for r in waste[:10]],
+        "top_converters": [_term(r) for r in converters[:5]],
+        "insights": insights,
+        "note": _compact_note(len(top), len(rows), "get_search_terms"),
+    }
 
 
 def get_negative_keywords(
@@ -528,7 +755,26 @@ def get_audience_performance(
             "No audience performance data found. This account's campaigns may not "
             "have explicit audience targeting (remarketing lists, in-market segments, "
             "demographics). PMax audience targeting is automatic and does not appear "
-            "in this report."
+            "in this report. Also note: custom segments (custom_audience) can never "
+            "be attached to Search campaigns — an empty result for a Search campaign "
+            "is expected, not missing data."
+        )
+
+    search_campaigns = sorted({
+        str(r.get("campaign.name") or r.get("campaign.id") or "")
+        for r in rows
+        if str(r.get("campaign.advertising_channel_type") or "") == "SEARCH"
+    })
+    if search_campaigns:
+        shown = ", ".join(search_campaigns[:5])
+        insights.append(
+            f"{len(search_campaigns)} of these campaigns are SEARCH campaigns "
+            f"({shown}{', …' if len(search_campaigns) > 5 else ''}). Custom "
+            "segments (custom_audience) CANNOT be attached to Search campaigns — "
+            "they only work in Display, Video, Demand Gen, and as PMax signals. "
+            "Do not propose custom-segment targeting for these campaigns; use "
+            "remarketing lists, in-market, or affinity segments instead (see the "
+            "audience compatibility matrix in the orchestration rules)."
         )
 
     return {"audiences": rows, "total_audiences": len(rows), "insights": insights}
@@ -675,6 +921,42 @@ def _date_clause(start: str, end: str) -> str:
     if start and end:
         return f"AND segments.date BETWEEN '{start}' AND '{end}'"
     return "AND segments.date DURING LAST_30_DAYS"
+
+
+def _compact_totals(rows: list[dict], currency_code: str) -> dict:
+    """Deterministic account-level aggregates over enriched metric rows."""
+    cost = sum((r.get("metrics.cost_micros") or 0) for r in rows) / 1_000_000
+    clicks = sum((r.get("metrics.clicks") or 0) for r in rows)
+    impressions = sum((r.get("metrics.impressions") or 0) for r in rows)
+    conversions = sum((r.get("metrics.conversions") or 0) for r in rows)
+    totals: dict = {
+        "cost": round(cost, 2),
+        "clicks": clicks,
+        "impressions": impressions,
+        "conversions": round(conversions, 1),
+        "currency": currency_code,
+    }
+    if conversions > 0:
+        totals["cpa"] = round(cost / conversions, 2)
+    if impressions > 0:
+        totals["ctr_pct"] = round(clicks / impressions * 100, 2)
+    return totals
+
+
+def _compact_note(shown: int, total: int, tool_name: str) -> str:
+    return (
+        f"Compact mode: aggregates plus the top {shown} of {total} rows. "
+        f"Call {tool_name} with compact=false when you need every row "
+        f"(e.g. before proposing changes to a specific low-spend entity)."
+    )
+
+
+def _status_counts(rows: list[dict], field: str) -> dict:
+    counts: dict[str, int] = {}
+    for r in rows:
+        status = str(r.get(field) or "UNKNOWN")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
 
 
 def _enrich_cost_fields(rows: list[dict], currency_code: str = "EUR") -> None:
