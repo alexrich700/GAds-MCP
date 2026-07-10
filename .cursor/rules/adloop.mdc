@@ -79,6 +79,29 @@ These tools call both APIs internally and return unified results with computed `
 
 `generate_tracking_code` includes recommended parameters for well-known GA4 events (sign_up, purchase, etc.) and optionally checks if the event already fires in GA4.
 
+### Google Tag Manager Read Tools (all read-only)
+
+| Tool | When to Use | Key Parameters |
+|------|-------------|----------------|
+| `audit_event_coverage` | The GTM headline tool: three-way audit of codebase events ↔ live GTM tags ↔ GA4 actual fires, with a per-event status matrix and insights | `expected_events` (extracted from the codebase first), `gtm_account_id`, `gtm_container_id`, date range |
+| `list_gtm_accounts` / `list_gtm_containers` | First-time discovery — find GTM account and container IDs | (accounts: none; containers: `gtm_account_id`) |
+| `list_gtm_tags` / `get_gtm_tag` | Inventory tags in the live container / full detail for one tag | `gtm_account_id`, `gtm_container_id` (+ `tag_id`) |
+| `list_gtm_triggers` / `get_gtm_trigger` | Inventory triggers / full detail incl. filter conditions | `gtm_account_id`, `gtm_container_id` (+ `trigger_id`) |
+| `list_gtm_variables` | Inventory user-defined variables | `gtm_account_id`, `gtm_container_id` |
+| `list_gtm_workspaces` / `get_gtm_workspace_diff` | See open workspaces / unpublished changes pending in one | `gtm_account_id`, `gtm_container_id` (+ `workspace_id`) |
+| `list_gtm_versions` / `get_gtm_version` | Container publish history / full metadata of one version | `gtm_account_id`, `gtm_container_id` (+ `version_id`) |
+
+**GTM prerequisites:** the Tag Manager API must be enabled in the user's GCP project and their account needs at least Read access on the container. OAuth tokens granted before the GTM scope existed must be re-consented (delete `~/.adloop/token.json`, re-run any tool) — an `INSUFFICIENT_SCOPES` structured error means exactly that.
+
+### When user asks "is everything tagged correctly" or wants a GTM audit
+
+1. Search the codebase for `gtag('event', ...)` and `dataLayer.push({event: ...})` calls; extract every distinct event name
+2. If GTM account/container IDs are unknown, call `list_gtm_accounts` → `list_gtm_containers` (or take them from the GTM UI: Admin → Container Settings)
+3. Call `audit_event_coverage` with the extracted `expected_events` — it returns a per-event status matrix (ok, tag_paused, tag_active_but_not_firing, gtm_paused_but_firing, ga4_only, …) plus insights
+4. Walk the non-ok statuses with the user: paused tags that should be live, active tags that never fire (trigger/filter problems — drill in with `get_gtm_trigger`), events firing with no tag or codebase reference (stale or third-party sources)
+5. `gtm_paused_but_firing` means the event reaches GA4 from somewhere other than the paused tag — hardcoded gtag, another container, or a mobile SDK; don't advise unpausing without finding the real source first
+6. Remember dynamic-event tags (`{{Event}}`) and Custom HTML tags are opaque to the audit — the tool lists them separately for manual review
+
 ### Planning Tools
 
 | Tool | When to Use | Key Parameters |

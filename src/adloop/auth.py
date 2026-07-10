@@ -27,6 +27,7 @@ _ALL_SCOPES = [
     "https://www.googleapis.com/auth/analytics.readonly",
     "https://www.googleapis.com/auth/analytics.edit",
     "https://www.googleapis.com/auth/adwords",
+    "https://www.googleapis.com/auth/tagmanager.readonly",
 ]
 
 _GA4_SCOPES = [
@@ -38,13 +39,25 @@ _ADS_SCOPES = [
     "https://www.googleapis.com/auth/adwords",
 ]
 
+_GTM_SCOPES = [
+    "https://www.googleapis.com/auth/tagmanager.readonly",
+]
+
 
 class CredentialsProvider(Protocol):
-    """Source of authenticated Google credentials for the current context."""
+    """Source of authenticated Google credentials for the current context.
+
+    ``gtm_credentials`` is optional: providers that don't implement it
+    (e.g. hosted deployments that haven't rolled out Tag Manager support)
+    cause GTM tools to fail with a clear capability error instead of a
+    credentials leak or an AttributeError.
+    """
 
     def ga4_credentials(self, config: AdLoopConfig) -> Credentials: ...
 
     def ads_credentials(self, config: AdLoopConfig) -> Credentials: ...
+
+    def gtm_credentials(self, config: AdLoopConfig) -> Credentials: ...
 
 
 class LocalFileCredentialsProvider:
@@ -72,6 +85,10 @@ class LocalFileCredentialsProvider:
     def ads_credentials(self, config: AdLoopConfig) -> Credentials:
         self._guard_local_only()
         return _local_credentials(config, _ADS_SCOPES)
+
+    def gtm_credentials(self, config: AdLoopConfig) -> Credentials:
+        self._guard_local_only()
+        return _local_credentials(config, _GTM_SCOPES)
 
 
 _active_provider: CredentialsProvider = LocalFileCredentialsProvider()
@@ -148,6 +165,18 @@ def _local_credentials(config: AdLoopConfig, scopes: list[str]) -> Credentials:
             "handles credentials for you: https://getadloop.com"
         ) from exc
     return credentials
+
+
+def get_gtm_credentials(config: AdLoopConfig) -> Credentials:
+    """Return authenticated credentials for the Google Tag Manager API."""
+    provider = _active_provider
+    if not hasattr(provider, "gtm_credentials"):
+        raise RuntimeError(
+            "This deployment's credentials provider does not support "
+            "Google Tag Manager. GTM tools are only available where the "
+            "provider implements gtm_credentials()."
+        )
+    return provider.gtm_credentials(config)
 
 
 def _oauth_flow(

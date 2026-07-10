@@ -210,3 +210,31 @@ class TestServerModeGates:
         runtime.set_deployment_mode("server")
         result = draft_image_assets(MagicMock(), campaign_id="1", image_paths=["x.png"])
         assert "not available on the hosted server" in result["error"]
+
+    def test_local_gtm_credentials_refuse_server_mode(self):
+        from adloop.auth import get_gtm_credentials
+
+        runtime.set_deployment_mode("server")
+        with pytest.raises(RuntimeError, match="server mode"):
+            get_gtm_credentials(AdLoopConfig())
+
+    def test_provider_without_gtm_support_fails_with_capability_error(self):
+        """A provider that predates GTM (e.g. a hosted deployment that
+        hasn't rolled it out) must produce a clear capability error, not an
+        AttributeError or a fallback to the wrong credentials."""
+        from adloop import auth
+
+        class _AdsGa4OnlyProvider:
+            def ga4_credentials(self, config):  # pragma: no cover
+                raise AssertionError("not exercised")
+
+            def ads_credentials(self, config):  # pragma: no cover
+                raise AssertionError("not exercised")
+
+        original = auth.get_credentials_provider()
+        auth.set_credentials_provider(_AdsGa4OnlyProvider())
+        try:
+            with pytest.raises(RuntimeError, match="does not support"):
+                auth.get_gtm_credentials(AdLoopConfig())
+        finally:
+            auth.set_credentials_provider(original)
