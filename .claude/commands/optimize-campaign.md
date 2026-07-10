@@ -7,6 +7,8 @@ Optimize Google Ads campaign: $ARGUMENTS
 
 Follow this checklist in order — earlier items have higher impact.
 
+**Context tip:** run the diagnosis reads with `compact=true` (totals + top offenders instead of full row dumps); switch to full mode only when drafting a change against a specific entity.
+
 ## 1. Diagnose
 
 - `get_campaign_performance` — current metrics

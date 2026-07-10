@@ -431,12 +431,17 @@ def get_campaign_performance(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    compact: bool = False,
 ) -> dict:
     """Get campaign-level performance metrics for a date range.
 
     Returns: campaign name, status, type, impressions, clicks, cost,
     conversions, CPA, ROAS, CTR for each campaign.
     Date format: "YYYY-MM-DD". Empty = last 30 days.
+
+    Set compact=true for audits/overviews on large accounts: returns
+    account totals, status/type breakdowns, the top-10 spenders, and
+    zero-conversion offenders instead of every row (~90% smaller).
     """
     from adloop.ads.read import get_campaign_performance as _impl
 
@@ -445,6 +450,7 @@ def get_campaign_performance(
         customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
+        compact=compact,
     )
 
 
@@ -454,11 +460,16 @@ def get_ad_performance(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    compact: bool = False,
 ) -> dict:
     """Get ad-level performance data including headlines, descriptions, and metrics.
 
     Returns: ad type, headlines, descriptions, final URL, impressions,
     clicks, CTR, conversions, cost for each ad.
+
+    Set compact=true for audits/overviews: returns totals, the top-10
+    ads with headline/description COUNTS instead of full asset lists,
+    plus incomplete-RSA and single-ad ad-group findings (~90% smaller).
     """
     from adloop.ads.read import get_ad_performance as _impl
 
@@ -467,6 +478,7 @@ def get_ad_performance(
         customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
+        compact=compact,
     )
 
 
@@ -476,11 +488,16 @@ def get_keyword_performance(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    compact: bool = False,
 ) -> dict:
     """Get keyword metrics including quality scores and competitive data.
 
     Returns: keyword text, match type, quality score, impressions,
     clicks, CTR, CPC, conversions for each keyword.
+
+    Set compact=true for audits/overviews: returns totals, match-type
+    distribution, the top-10 spenders, low-quality-score keywords, and
+    zero-conversion spenders instead of every row (~90% smaller).
     """
     from adloop.ads.read import get_keyword_performance as _impl
 
@@ -489,6 +506,7 @@ def get_keyword_performance(
         customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
+        compact=compact,
     )
 
 
@@ -498,11 +516,16 @@ def get_search_terms(
     customer_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
+    compact: bool = False,
 ) -> dict:
     """Get search terms report — what users actually typed before clicking your ads.
 
     Critical for finding negative keyword opportunities and understanding user intent.
     Returns: search term, campaign, ad group, impressions, clicks, conversions.
+
+    Set compact=true for audits/overviews: returns totals, the top-10
+    terms by clicks, ready-made negative-keyword waste candidates
+    (5+ clicks, zero conversions), and top converters (~90% smaller).
     """
     from adloop.ads.read import get_search_terms as _impl
 
@@ -511,6 +534,7 @@ def get_search_terms(
         customer_id=customer_id or current_config().ads.customer_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
+        compact=compact,
     )
 
 

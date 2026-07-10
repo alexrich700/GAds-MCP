@@ -12,6 +12,8 @@ Analyze Google Ads and GA4 performance: $ARGUMENTS
 - If specific campaigns mentioned, filter by name
 - If keywords are relevant, also pull `get_keyword_performance` and `get_search_terms`
 
+**Context tip:** for the account-wide pass, call the performance tools with `compact=true` — you get totals, top-10 rows, and pre-computed offender lists instead of every row. Only switch to full mode when drilling into a specific campaign/keyword. In harnesses that support subagents, this whole data-pull step can be delegated to a subagent that returns just the summary.
+
 ## 2. Analyze
 
 - Spend, Clicks, Conversions, CPA, CTR per campaign

@@ -103,6 +103,8 @@ The best features come from real workflows. If you're using AdLoop and find your
 | `get_demographic_targeting` | List demographic criteria (age/gender/parental status/income) on an ad group or campaign |
 | `run_gaql` | Arbitrary GAQL queries for anything else |
 
+> **Compact mode** — `get_campaign_performance`, `get_keyword_performance`, `get_search_terms`, and `get_ad_performance` accept `compact=true`: account totals, breakdowns, top-10 rows, and pre-computed offender lists (zero-conversion spenders, low-QS keywords, negative-keyword candidates, thin RSAs) instead of every row. ~90% smaller responses — built for account audits so raw tables don't flood your AI's context.
+
 ### Cross-Reference Tools (GA4 + Ads Combined)
 
 These tools call both APIs internally and return unified results with auto-generated insights. They're the core of what makes AdLoop different from having separate GA4 and Ads tools.
