@@ -738,8 +738,8 @@ def get_demographic_targeting(
     from adloop.ads.read import get_demographic_targeting as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         ad_group_id=ad_group_id,
         campaign_id=campaign_id,
     )
@@ -1300,8 +1300,8 @@ def draft_demographic_targeting(
     from adloop.ads.write import draft_demographic_targeting as _impl
 
     return _impl(
-        _config,
-        customer_id=customer_id or _config.ads.customer_id,
+        current_config(),
+        customer_id=customer_id or current_config().ads.customer_id,
         ad_group_id=ad_group_id,
         campaign_id=campaign_id,
         age_ranges=age_ranges,

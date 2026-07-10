@@ -1567,22 +1567,6 @@ class _FakeAdGroupCriterionService:
         )
 
 
-class _FakeCampaignCriterionService:
-    def __init__(self):
-        self.operations = None
-
-    def mutate_campaign_criteria(self, customer_id, operations):
-        self.operations = operations
-        return SimpleNamespace(
-            results=[
-                SimpleNamespace(
-                    resource_name=f"customers/{customer_id}/campaignCriteria/1001~{i}"
-                )
-                for i, _ in enumerate(operations)
-            ]
-        )
-
-
 def test_apply_add_demographic_criteria_at_ad_group_level():
     crit_service = _FakeAdGroupCriterionService()
     client = _FakeClient({
@@ -1640,6 +1624,46 @@ def test_apply_add_demographic_criteria_at_campaign_level():
     assert op.campaign == "customers/1234567890/campaigns/1001"
     assert op.negative is True
     assert op.income_range.type_ == client.enums.IncomeRangeTypeEnum.INCOME_RANGE_90_UP
+
+
+def test_draft_demographic_targeting_warns_on_undetermined_exclusion(config):
+    """Excluding UNDETERMINED silently drops every unclassifiable user —
+    often the single largest 'segment'. The preview must call it out."""
+    result = write.draft_demographic_targeting(
+        config,
+        customer_id="123-456-7890",
+        ad_group_id="2002",
+        genders=["undetermined"],
+    )
+
+    assert result["operation"] == "add_demographic_criteria"
+    assert any("UNDETERMINED" in w for w in result["warnings"])
+
+
+def test_draft_demographic_targeting_rejects_campaign_level_positive(config):
+    """The API only supports demographic EXCLUSIONS at campaign level."""
+    result = write.draft_demographic_targeting(
+        config,
+        customer_id="123-456-7890",
+        campaign_id="1001",
+        genders=["female"],
+        negative=False,
+    )
+
+    assert result["error"] == "Validation failed"
+    assert any("ad_group_id instead" in d for d in result["details"])
+
+
+def test_get_demographic_targeting_rejects_non_numeric_ids(config):
+    from adloop.ads import read
+
+    result = read.get_demographic_targeting(
+        config,
+        customer_id="123-456-7890",
+        ad_group_id="2002 OR campaign.id > 0",
+    )
+
+    assert "numeric" in result["error"]
 
 
 def test_remove_entity_accepts_ad_group_criterion_alias(config):
