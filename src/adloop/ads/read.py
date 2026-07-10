@@ -561,6 +561,10 @@ def get_demographic_targeting(
         return {
             "error": "Provide only one of ad_group_id or campaign_id, not both",
         }
+    if (ad_group_id or campaign_id) and not (ad_group_id or campaign_id).isdigit():
+        return {
+            "error": "ad_group_id / campaign_id must be a numeric Google Ads ID",
+        }
 
     demographic_types = (
         "'AGE_RANGE', 'GENDER', 'PARENTAL_STATUS', 'INCOME_RANGE'"

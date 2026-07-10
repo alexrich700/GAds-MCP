@@ -966,6 +966,13 @@ def draft_demographic_targeting(
             "income_ranges must contain a value"
         )
 
+    if campaign_id and not negative:
+        errors.append(
+            "Campaign-level demographic criteria can only be EXCLUSIONS "
+            "(negative=True). Positive demographic targeting lives on ad "
+            "groups — pass ad_group_id instead."
+        )
+
     if errors:
         return {"error": "Validation failed", "details": errors}
 
@@ -976,6 +983,16 @@ def draft_demographic_targeting(
             "targeting. Users not matching the criteria (plus UNDETERMINED) "
             "will no longer see ads. This is uncommon — exclusions are the "
             "typical pattern."
+        )
+    if negative and any(
+        v.endswith("UNDETERMINED")
+        for v in age_values + gender_values + parental_values + income_values
+    ):
+        warnings.append(
+            "Excluding UNDETERMINED blocks every user Google cannot classify "
+            "for that dimension — often 30%+ of impressions, more under EU "
+            "consent restrictions. Reach drops far beyond the named segment. "
+            "Verify this is intentional."
         )
     excludes_all_age = len(age_values) >= len(_AGE_RANGE_TYPES) - 1
     excludes_all_gender = len(gender_values) >= len(_GENDER_TYPES) - 1
