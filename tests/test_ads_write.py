@@ -78,6 +78,24 @@ class _FakeGoogleAdsService(_FakePathService):
         raise AssertionError(f"Unexpected search call for customer {customer_id}: {query}")
 
 
+class _FakeCampaignCriterionService:
+    def __init__(self):
+        self.operations = None
+
+    def mutate_campaign_criteria(
+        self, customer_id: str, operations: list[object]
+    ) -> object:
+        self.operations = operations
+        return SimpleNamespace(
+            results=[
+                SimpleNamespace(
+                    resource_name=f"customers/{customer_id}/campaignCriteria/{i}"
+                )
+                for i, _ in enumerate(operations)
+            ]
+        )
+
+
 class _FakeClient:
     def __init__(self, services: dict[str, object]):
         self._base = GoogleAdsClient(
@@ -628,6 +646,73 @@ def test_update_campaign_preview_no_preservation_key_when_no_negatives(
     assert not any(
         "PRESERVED" in w for w in result.get("warnings", [])
     )
+
+
+def test_add_negative_locations_returns_preview_with_deduped_ids(config):
+    result = write.add_negative_locations(
+        config,
+        customer_id="123-456-7890",
+        campaign_id="1001",
+        geo_target_ids=["2840", "2840", "1023191"],
+    )
+
+    assert result["operation"] == "add_negative_locations"
+    assert result["entity_type"] == "negative_location"
+    assert result["entity_id"] == "1001"
+    assert result["changes"]["geo_target_ids"] == ["2840", "1023191"]
+    assert result["status"] == "PENDING_CONFIRMATION"
+
+
+def test_add_negative_locations_requires_campaign_and_geo_ids(config):
+    result = write.add_negative_locations(
+        config,
+        customer_id="123-456-7890",
+    )
+
+    assert result["error"] == "Validation failed"
+    assert any("campaign_id" in d for d in result["details"])
+    assert any("geo_target_id" in d for d in result["details"])
+
+
+def test_add_negative_locations_rejects_non_numeric_geo_ids(config):
+    result = write.add_negative_locations(
+        config,
+        customer_id="123-456-7890",
+        campaign_id="1001",
+        geo_target_ids=["Berlin"],
+    )
+
+    assert result["error"] == "Validation failed"
+    assert any("numeric" in d for d in result["details"])
+
+
+def test_apply_add_negative_locations_builds_negative_criteria():
+    criterion_service = _FakeCampaignCriterionService()
+    client = _FakeClient(
+        {
+            "CampaignCriterionService": criterion_service,
+            "CampaignService": _FakePathService("campaigns"),
+        }
+    )
+
+    result = write._apply_add_negative_locations(
+        client,
+        "1234567890",
+        {"campaign_id": "1001", "geo_target_ids": ["2840", "1023191"]},
+    )
+
+    assert len(criterion_service.operations) == 2
+    for operation, geo_id in zip(
+        criterion_service.operations, ["2840", "1023191"]
+    ):
+        criterion = operation.create
+        assert criterion.campaign == "customers/1234567890/campaigns/1001"
+        assert criterion.negative is True
+        assert (
+            criterion.location.geo_target_constant
+            == f"geoTargetConstants/{geo_id}"
+        )
+    assert len(result["resource_names"]) == 2
 
 
 def test_apply_update_campaign_sets_target_spend_cpc_cap():
