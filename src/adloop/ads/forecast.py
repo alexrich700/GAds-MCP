@@ -295,6 +295,69 @@ def _post_keyword_ideas_rest_page(
     return response.json()
 
 
+
+_MONTH_NUMBERS = {
+    "JANUARY": 1, "FEBRUARY": 2, "MARCH": 3, "APRIL": 4, "MAY": 5,
+    "JUNE": 6, "JULY": 7, "AUGUST": 8, "SEPTEMBER": 9, "OCTOBER": 10,
+    "NOVEMBER": 11, "DECEMBER": 12,
+}
+
+_MONTH_NAMES = {v: k.capitalize() for k, v in _MONTH_NUMBERS.items()}
+
+
+def _parse_monthly_volumes(raw: list[dict]) -> list[dict]:
+    """REST monthlySearchVolumes → compact chronological history.
+
+    Keeps the last 24 months: enough to see seasonality across two cycles
+    without flooding the response (the API returns up to ~4 years).
+    """
+    volumes = []
+    for row in raw:
+        month = _MONTH_NUMBERS.get(str(row.get("month", "")).upper())
+        year = _maybe_int(row.get("year"))
+        if month is None or year is None:
+            continue
+        volumes.append({
+            "year": year,
+            "month": month,
+            "searches": _maybe_int(row.get("monthlySearches")) or 0,
+        })
+    volumes.sort(key=lambda v: (v["year"], v["month"]))
+    return volumes[-24:]
+
+
+def _seasonality_insight(idea: dict) -> str | None:
+    """Name the peak months when demand is meaningfully seasonal (>=40%
+    above the keyword's own monthly average)."""
+    volumes = idea.get("monthly_search_volumes") or []
+    if len(volumes) < 12:
+        return None
+
+    by_month: dict[int, list[int]] = {}
+    for v in volumes:
+        by_month.setdefault(v["month"], []).append(v["searches"])
+    month_avgs = {m: sum(s) / len(s) for m, s in by_month.items()}
+    overall = sum(month_avgs.values()) / len(month_avgs)
+    if overall <= 0:
+        return None
+
+    peaks = sorted(
+        (m for m, avg in month_avgs.items() if avg >= overall * 1.4),
+        key=lambda m: month_avgs[m],
+        reverse=True,
+    )
+    if not peaks:
+        return None
+
+    names = ", ".join(_MONTH_NAMES[m] for m in peaks[:3])
+    ratio = month_avgs[peaks[0]] / overall
+    return (
+        f"'{idea['keyword']}' is seasonal: demand peaks in {names} "
+        f"(up to {ratio:.1f}x its monthly average). Plan budgets and "
+        f"campaign launches around the ramp-up, not the peak itself."
+    )
+
+
 def discover_keywords(
     config: AdLoopConfig,
     *,
@@ -304,6 +367,7 @@ def discover_keywords(
     language_id: str = "1000",
     page_size: int = 50,
     customer_id: str = "",
+    include_monthly_volumes: bool = False,
 ) -> dict:
     """Discover new keyword ideas using Google Ads Keyword Planner.
 
@@ -320,6 +384,9 @@ def discover_keywords(
     geo_target_id: geo target constant (2276=Germany, 2840=USA, 2826=UK)
     language_id: language constant (1000=English, 1001=German, 1002=French)
     page_size: max number of keyword ideas to return (default 50, max 1000)
+    include_monthly_volumes: attach per-month search volume history (up to
+        ~4 years, trimmed to the last 24 months, top 20 ideas only) plus a
+        seasonality insight — the "Google Trends" view for keyword demand.
 
     Network: this tool intentionally bypasses the google-ads gRPC client for
     KeywordPlanIdeaService and calls the v23 REST endpoint directly. The
@@ -358,7 +425,7 @@ def discover_keywords(
             # ``_micros_to_currency`` preserve legitimate 0 values that
             # falsy checks would otherwise silently drop. See the helper
             # docstrings for the failure modes this defends against.
-            ideas.append({
+            entry = {
                 "keyword": idea.get("text", ""),
                 "avg_monthly_searches": _maybe_int(metrics.get("avgMonthlySearches")),
                 "competition": competition,
@@ -369,7 +436,12 @@ def discover_keywords(
                 "high_top_of_page_bid": _micros_to_currency(
                     _maybe_int(metrics.get("highTopOfPageBidMicros"))
                 ),
-            })
+            }
+            if include_monthly_volumes:
+                entry["monthly_search_volumes"] = _parse_monthly_volumes(
+                    metrics.get("monthlySearchVolumes") or []
+                )
+            ideas.append(entry)
 
         page_token = payload.get("nextPageToken") or ""
         if not page_token:
@@ -377,6 +449,13 @@ def discover_keywords(
 
     # Sort by avg monthly searches descending (None last)
     ideas.sort(key=lambda x: x["avg_monthly_searches"] or 0, reverse=True)
+
+    if include_monthly_volumes:
+        # History is context-heavy (24 rows per keyword) — keep it on the
+        # ideas that matter and drop it from the long tail.
+        for i, idea in enumerate(ideas):
+            if i >= 20:
+                idea.pop("monthly_search_volumes", None)
 
     insights = []
     if ideas:
@@ -399,6 +478,9 @@ def discover_keywords(
                 f"Highest-volume idea: '{top['keyword']}' with ~{top['avg_monthly_searches']:,} "
                 f"avg monthly searches."
             )
+            seasonality = _seasonality_insight(top)
+            if seasonality:
+                insights.append(seasonality)
 
     return {
         "keyword_ideas": ideas,

@@ -19,13 +19,13 @@ An MCP server that gives your AI assistant read + write access to Google Ads and
 </div>
 
 > [!TIP]
-> **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the same 63 tools from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
+> **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the same 64 tools from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
 
 ---
 
 ## Cloud or Self-Hosted?
 
-Both versions run the same 63 tools with the same safety model. The difference is who handles the plumbing:
+Both versions run the same 64 tools with the same safety model. The difference is who handles the plumbing:
 
 |  | ☁️ [AdLoop Cloud](https://getadloop.com) | 🛠️ Self-hosted (this repo) |
 |---|---|---|
@@ -63,7 +63,7 @@ Every tool exists because of an actual problem hit while running real Google Ads
 
 The best features come from real workflows. If you're using AdLoop and find yourself wishing it could do something it can't, **open an issue describing your situation** — not just "add feature X" but "I was trying to do Y and couldn't because Z." The context matters more than the request.
 
-## All 63 Tools
+## All 64 Tools
 
 > **Quick start:** `pip install adloop` or `git clone https://github.com/kLOsk/adloop.git && cd adloop && uv sync && uv run adloop init` — or zero setup on [AdLoop Cloud](https://getadloop.com)
 
@@ -150,13 +150,19 @@ These tools read the live GTM container and join it with the codebase + GA4 to f
 | `list_gsc_sites` | List Search Console properties the connected account can access |
 | `run_gsc_report` | Organic search analytics — clicks, impressions, CTR, position by query/page/country/device/date |
 
+### Web Performance Tools
+
+| Tool | What It Does |
+|------|-------------|
+| `analyze_page_speed` | PageSpeed Insights for landing pages — Lighthouse score, Core Web Vitals, real-user CrUX data, top fixes. No OAuth needed (optional API key). |
+
 > **Setup for GSC tools** — Enable the **Search Console API** in your GCP project. Upgrading OAuth users must re-authorize once for the new scope (delete `~/.adloop/token.json`, run any tool). The killer combo: cross-reference organic queries with `get_keyword_performance` to find paid/organic cannibalization and untapped keyword opportunities.
 
 ### Planning Tools
 
 | Tool | What It Does |
 |------|-------------|
-| `discover_keywords` | Discover new keyword ideas from seed keywords and/or a URL using Google Ads Keyword Planner. Returns avg monthly searches, competition level, and top-of-page bid range. |
+| `discover_keywords` | Discover new keyword ideas from seed keywords and/or a URL — with optional per-month search history + seasonality insights (`include_monthly_volumes`) using Google Ads Keyword Planner. Returns avg monthly searches, competition level, and top-of-page bid range. |
 | `estimate_budget` | Forecast clicks, impressions, and cost for a set of keywords using Google Ads Keyword Planner. Supports geo/language targeting. Essential for budget planning before launching campaigns. |
 
 ### Google Ads Write Tools
@@ -406,7 +412,7 @@ All configuration lives in `~/.adloop/config.yaml`. See [`config.yaml.example`](
 ```
 src/adloop/
 ├── __init__.py        # Entry point — routes 'adloop init' to wizard, otherwise starts MCP server
-├── server.py          # FastMCP server — 63 tool registrations with safety annotations
+├── server.py          # FastMCP server — 64 tool registrations with safety annotations
 ├── config.py          # Config loader (~/.adloop/config.yaml)
 ├── auth.py            # OAuth 2.0 flow (user-supplied credentials, headless fallback) + service accounts; GA4 / Ads / GTM scopes
 ├── cli.py             # Interactive 'adloop init' setup wizard

@@ -517,6 +517,25 @@ def run_gsc_report(
 
 @mcp.tool(annotations=_READONLY)
 @_safe
+def analyze_page_speed(url: str, strategy: str = "mobile") -> dict:
+    """Run PageSpeed Insights for a landing page — Lighthouse + real-user data.
+
+    Returns the performance score (0-100), lab Core Web Vitals (LCP, CLS,
+    TBT, FCP), CrUX field data from real Chrome users where available
+    (p75 LCP/INP/CLS + FAST/AVERAGE/SLOW ratings), and the top improvement
+    opportunities with estimated savings.
+
+    Use on ad final_urls: slow landing pages depress Quality Score and
+    waste paid clicks. strategy: "mobile" (default — most paid traffic) or
+    "desktop". Takes 10-30s; that is normal for a Lighthouse run.
+    """
+    from adloop.pagespeed import analyze_page_speed as _impl
+
+    return _impl(current_config(), url=url, strategy=strategy)
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
 def list_accounts(limit: int = 200) -> dict:
     """List accessible Google Ads accounts.
 
@@ -2101,12 +2120,17 @@ def discover_keywords(
     language_id: str = "1000",
     page_size: int = 50,
     customer_id: str = "",
+    include_monthly_volumes: bool = False,
 ) -> dict:
     """Discover new keyword ideas using Google Ads Keyword Planner.
 
     Mirrors the "Discover new keywords" UI in Keyword Planner:
     - Start with keywords: pass seed_keywords (e.g. ["running shoes"])
     - Start with a website: pass url (e.g. "https://example.com/products")
+
+    Set include_monthly_volumes=true for per-month search history (last 24
+    months, top-20 ideas) plus a seasonality insight — use when the user
+    asks about demand trends, seasonality, or "when should I ramp budget".
     - Both together: keywords + url for more targeted ideas
 
     Returns keyword ideas sorted by avg monthly search volume, with
@@ -2126,6 +2150,7 @@ def discover_keywords(
         language_id=language_id,
         page_size=page_size,
         customer_id=customer_id or current_config().ads.customer_id,
+        include_monthly_volumes=include_monthly_volumes,
     )
 
 

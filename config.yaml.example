@@ -53,6 +53,13 @@ gtm:
   account_id: ""
   container_id: ""
 
+pagespeed:
+  # Optional Google API key for PageSpeed Insights (analyze_page_speed).
+  # Works without one at very low rates; create a key in your GCP project
+  # (APIs & Services -> Credentials) and enable "PageSpeed Insights API"
+  # for a stable quota. No OAuth involved.
+  api_key: ""
+
 safety:
   # Maximum daily budget allowed per campaign (in your account's currency).
   # AdLoop will reject any campaign creation or budget change above this.

@@ -28,6 +28,7 @@ def _rest_idea(
     competition_index: int | None = None,
     low_bid_micros: int | None = None,
     high_bid_micros: int | None = None,
+    monthly_volumes: list[tuple[int, str, int]] | None = None,
 ) -> dict:
     """Build a REST-shape keyword idea entry.
 
@@ -43,6 +44,11 @@ def _rest_idea(
         metrics["lowTopOfPageBidMicros"] = str(low_bid_micros)
     if high_bid_micros is not None:
         metrics["highTopOfPageBidMicros"] = str(high_bid_micros)
+    if monthly_volumes is not None:
+        metrics["monthlySearchVolumes"] = [
+            {"year": str(y), "month": m, "monthlySearches": str(s)}
+            for (y, m, s) in monthly_volumes
+        ]
     return {"text": text, "keywordIdeaMetrics": metrics}
 
 
@@ -756,3 +762,74 @@ class TestIsRateLimitError:
 
     def test_bare_429_not_matched_to_avoid_false_positives(self):
         assert not _is_rate_limit_error(Exception("Error on entity 429"))
+
+
+class TestMonthlySearchVolumes:
+    """include_monthly_volumes attaches history + seasonality insight."""
+
+    def _seasonal_idea(self):
+        # Two years of history: massive December peaks, quiet otherwise.
+        months = [
+            "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+            "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+        ]
+        volumes = []
+        for year in (2024, 2025):
+            for m in months:
+                volumes.append((year, m, 40_000 if m == "DECEMBER" else 5_000))
+        return _rest_idea(
+            "advent calendar", avg_monthly=8000, competition="MEDIUM",
+            monthly_volumes=volumes,
+        )
+
+    def test_off_by_default(self, config, monkeypatch):
+        _patch_rest({"results": [self._seasonal_idea()]}, monkeypatch)
+
+        result = forecast.discover_keywords(config, seed_keywords=["advent"])
+
+        assert "monthly_search_volumes" not in result["keyword_ideas"][0]
+
+    def test_history_is_chronological_and_capped_to_24_months(
+        self, config, monkeypatch
+    ):
+        _patch_rest({"results": [self._seasonal_idea()]}, monkeypatch)
+
+        result = forecast.discover_keywords(
+            config, seed_keywords=["advent"], include_monthly_volumes=True
+        )
+
+        volumes = result["keyword_ideas"][0]["monthly_search_volumes"]
+        assert len(volumes) == 24
+        assert volumes[0] == {"year": 2024, "month": 1, "searches": 5_000}
+        assert volumes[-1] == {"year": 2025, "month": 12, "searches": 40_000}
+
+    def test_seasonality_insight_names_peak_months(self, config, monkeypatch):
+        _patch_rest({"results": [self._seasonal_idea()]}, monkeypatch)
+
+        result = forecast.discover_keywords(
+            config, seed_keywords=["advent"], include_monthly_volumes=True
+        )
+
+        seasonal = [i for i in result["insights"] if "seasonal" in i]
+        assert len(seasonal) == 1
+        assert "December" in seasonal[0]
+        assert "advent calendar" in seasonal[0]
+
+    def test_flat_demand_gets_no_seasonality_insight(self, config, monkeypatch):
+        flat = _rest_idea(
+            "accounting software", avg_monthly=5000, competition="HIGH",
+            monthly_volumes=[
+                (y, m, 5_000)
+                for y in (2024, 2025)
+                for m in ("JANUARY", "APRIL", "JULY", "OCTOBER", "DECEMBER",
+                          "FEBRUARY", "MARCH", "MAY", "JUNE", "AUGUST",
+                          "SEPTEMBER", "NOVEMBER")
+            ],
+        )
+        _patch_rest({"results": [flat]}, monkeypatch)
+
+        result = forecast.discover_keywords(
+            config, seed_keywords=["accounting"], include_monthly_volumes=True
+        )
+
+        assert not any("seasonal" in i for i in result["insights"])

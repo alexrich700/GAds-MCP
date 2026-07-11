@@ -44,6 +44,11 @@ class GtmConfig:
 
 
 @dataclass
+class PageSpeedConfig:
+    api_key: str = ""  # optional — keyless PSI calls work but are rate-limited
+
+
+@dataclass
 class SafetyConfig:
     max_daily_budget: float = 50.0
     max_bid_increase_pct: int = 100
@@ -59,6 +64,7 @@ class AdLoopConfig:
     ads: AdsConfig = field(default_factory=AdsConfig)
     gsc: GscConfig = field(default_factory=GscConfig)
     gtm: GtmConfig = field(default_factory=GtmConfig)
+    pagespeed: PageSpeedConfig = field(default_factory=PageSpeedConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     # Absolute path the config was resolved from (even if it did not exist
     # on disk when loaded). Used by the runtime to tell callers exactly
@@ -96,6 +102,7 @@ def load_config(config_path: str | None = None) -> AdLoopConfig:
     ads_raw = raw.get("ads", {})
     gsc_raw = raw.get("gsc", {})
     gtm_raw = raw.get("gtm", {})
+    pagespeed_raw = raw.get("pagespeed", {})
     safety_raw = raw.get("safety", {})
 
     return AdLoopConfig(
@@ -118,6 +125,9 @@ def load_config(config_path: str | None = None) -> AdLoopConfig:
         gtm=GtmConfig(
             account_id=str(gtm_raw.get("account_id", "")),
             container_id=str(gtm_raw.get("container_id", "")),
+        ),
+        pagespeed=PageSpeedConfig(
+            api_key=str(pagespeed_raw.get("api_key", "")),
         ),
         safety=SafetyConfig(
             max_daily_budget=safety_raw.get("max_daily_budget", 50.0),
