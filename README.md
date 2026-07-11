@@ -226,7 +226,7 @@ AdLoop manages real ad spend, so safety is not optional.
 > *(Upgrading from ≤0.9 with built-in credentials? Those sign-ins were retired in 0.10 — run `adloop init` once to switch to your own project.)*
 
 > [!IMPORTANT]
-> **Seeing `deleted_client: The OAuth client was deleted.` or `invalid_client`?** The shared Google Cloud project behind AdLoop ≤0.9's bundled credentials has been shut down, so its stored sign-ins no longer refresh. Two ways forward: **[AdLoop Cloud](https://getadloop.com)** (connect Google in two clicks, nothing to configure) or stay self-hosted with `pip install -U adloop && adloop init` to set up your own free Google Cloud project. Details in [the pinned issue](https://github.com/kLOsk/adloop/issues).
+> **Seeing `deleted_client: The OAuth client was deleted.` or `invalid_client`?** The shared Google Cloud project behind AdLoop ≤0.9's bundled credentials has been shut down, so its stored sign-ins no longer refresh. Two ways forward: **[AdLoop Cloud](https://getadloop.com)** (connect Google in two clicks, nothing to configure) or stay self-hosted with `pip install -U adloop && adloop init` to set up your own free Google Cloud project. Details in [the pinned issue (#49)](https://github.com/kLOsk/adloop/issues/49).
 
 ### Install
 
