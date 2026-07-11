@@ -167,6 +167,25 @@ def _structured_error(fn_name: str, exc: Exception) -> dict:
             "auth_error": "INVALID_GRANT",
         }
 
+    if "deleted_client" in err_lower or "invalid_client" in err_lower:
+        return {
+            "error": (
+                "Authentication failed — the OAuth client behind your stored "
+                "credentials no longer exists or is invalid."
+            ),
+            "hint": (
+                "If you set up AdLoop before v0.10 with its bundled "
+                "credentials: that shared Google Cloud project has been "
+                "retired. Fastest fix: AdLoop Cloud (https://getadloop.com) — "
+                "connect Google in two clicks, no Google Cloud project "
+                "needed. To stay self-hosted, run `adloop init` and supply "
+                "your own OAuth credentials. If you already use your own "
+                "project, verify client id/secret in "
+                "~/.adloop/credentials.json."
+            ),
+            "auth_error": "OAUTH_CLIENT_DELETED_OR_INVALID",
+        }
+
     if (
         "insufficient authentication scopes" in err_lower
         or "insufficient_scope" in err_lower

@@ -10,6 +10,35 @@ from adloop.server import (
 )
 
 
+def test_structured_error_steers_deleted_oauth_client_to_cloud_or_byo():
+    """Users on <= v0.9 bundled credentials hit this the moment the retired
+    shared OAuth project is deleted — the error must route them to AdLoop
+    Cloud or their own project, not leave a raw Google error."""
+    error = Exception(
+        "('deleted_client: The OAuth client was deleted.', "
+        "{'error': 'deleted_client', "
+        "'error_description': 'The OAuth client was deleted.'})"
+    )
+
+    result = _structured_error("get_campaign_performance", error)
+
+    assert result["auth_error"] == "OAUTH_CLIENT_DELETED_OR_INVALID"
+    assert "getadloop.com" in result["hint"]
+    assert "adloop init" in result["hint"]
+
+
+def test_structured_error_detects_invalid_client_secret():
+    error = Exception(
+        "('invalid_client: Unauthorized', {'error': 'invalid_client', "
+        "'error_description': 'Unauthorized'})"
+    )
+
+    result = _structured_error("run_ga4_report", error)
+
+    assert result["auth_error"] == "OAUTH_CLIENT_DELETED_OR_INVALID"
+    assert "credentials.json" in result["hint"]
+
+
 def test_structured_error_detects_invalid_developer_token():
     error = Exception(
         "errors { error_code { authentication_error: DEVELOPER_TOKEN_INVALID } "
