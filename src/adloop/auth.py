@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 # overwrite each other at the same token_path.
 _ALL_SCOPES = [
     "https://www.googleapis.com/auth/analytics.readonly",
+    "https://www.googleapis.com/auth/analytics.edit",
     "https://www.googleapis.com/auth/adwords",
     "https://www.googleapis.com/auth/tagmanager.readonly",
     "https://www.googleapis.com/auth/webmasters.readonly",
@@ -33,6 +34,9 @@ _ALL_SCOPES = [
 
 _GA4_SCOPES = [
     "https://www.googleapis.com/auth/analytics.readonly",
+    # Required for GA4 writes (key events). The Admin API has no
+    # narrower write scope.
+    "https://www.googleapis.com/auth/analytics.edit",
 ]
 
 _ADS_SCOPES = [

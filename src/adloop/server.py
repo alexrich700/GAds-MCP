@@ -2045,6 +2045,31 @@ def confirm_and_apply(
 # ---------------------------------------------------------------------------
 
 
+@mcp.tool(annotations=_WRITE)
+@_safe
+def draft_key_event(
+    event_name: str,
+    counting_method: str = "ONCE_PER_EVENT",
+    property_id: str = "",
+) -> dict:
+    """Draft marking a GA4 event as a key event (conversion) — returns a PREVIEW.
+
+    The fix for "the event fires but isn't tracked as a conversion":
+    attribution_check / validate_tracking diagnose it, this closes the
+    loop. counting_method: ONCE_PER_EVENT (purchases) or ONCE_PER_SESSION
+    (sign-ups). Call confirm_and_apply with the returned plan_id to
+    execute. Applies to future data only.
+    """
+    from adloop.ga4.write import draft_key_event as _impl
+
+    return _impl(
+        current_config(),
+        property_id=property_id or current_config().ga4.property_id,
+        event_name=event_name,
+        counting_method=counting_method,
+    )
+
+
 @mcp.tool(annotations=_READONLY)
 @_safe
 def validate_tracking(

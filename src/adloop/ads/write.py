@@ -2520,8 +2520,15 @@ def _extract_resource_name(resp: object) -> str:
 
 
 def _execute_plan(config: AdLoopConfig, plan: object) -> dict:
-    """Dispatch to the right Google Ads mutate call based on plan.operation."""
+    """Dispatch to the right Google API call based on plan.operation."""
     from adloop.ads.client import get_ads_client, normalize_customer_id
+
+    # GA4 plans dispatch before Ads client construction so they work for
+    # GA4-only setups (no Ads credentials/developer token required).
+    if plan.operation == "create_key_event":
+        from adloop.ga4.write import _apply_create_key_event
+
+        return _apply_create_key_event(config, plan.changes)
 
     client = get_ads_client(config)
     cid = normalize_customer_id(plan.customer_id)
