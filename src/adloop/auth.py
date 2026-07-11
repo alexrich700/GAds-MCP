@@ -28,6 +28,7 @@ _ALL_SCOPES = [
     "https://www.googleapis.com/auth/analytics.edit",
     "https://www.googleapis.com/auth/adwords",
     "https://www.googleapis.com/auth/tagmanager.readonly",
+    "https://www.googleapis.com/auth/webmasters.readonly",
 ]
 
 _GA4_SCOPES = [
@@ -41,6 +42,10 @@ _ADS_SCOPES = [
 
 _GTM_SCOPES = [
     "https://www.googleapis.com/auth/tagmanager.readonly",
+]
+
+_GSC_SCOPES = [
+    "https://www.googleapis.com/auth/webmasters.readonly",
 ]
 
 
@@ -58,6 +63,8 @@ class CredentialsProvider(Protocol):
     def ads_credentials(self, config: AdLoopConfig) -> Credentials: ...
 
     def gtm_credentials(self, config: AdLoopConfig) -> Credentials: ...
+
+    def gsc_credentials(self, config: AdLoopConfig) -> Credentials: ...
 
 
 class LocalFileCredentialsProvider:
@@ -89,6 +96,10 @@ class LocalFileCredentialsProvider:
     def gtm_credentials(self, config: AdLoopConfig) -> Credentials:
         self._guard_local_only()
         return _local_credentials(config, _GTM_SCOPES)
+
+    def gsc_credentials(self, config: AdLoopConfig) -> Credentials:
+        self._guard_local_only()
+        return _local_credentials(config, _GSC_SCOPES)
 
 
 _active_provider: CredentialsProvider = LocalFileCredentialsProvider()
@@ -177,6 +188,18 @@ def get_gtm_credentials(config: AdLoopConfig) -> Credentials:
             "provider implements gtm_credentials()."
         )
     return provider.gtm_credentials(config)
+
+
+def get_gsc_credentials(config: AdLoopConfig) -> Credentials:
+    """Return authenticated credentials for the Search Console API."""
+    provider = _active_provider
+    if not hasattr(provider, "gsc_credentials"):
+        raise RuntimeError(
+            "This deployment's credentials provider does not support "
+            "Google Search Console. GSC tools are only available where "
+            "the provider implements gsc_credentials()."
+        )
+    return provider.gsc_credentials(config)
 
 
 def _oauth_flow(

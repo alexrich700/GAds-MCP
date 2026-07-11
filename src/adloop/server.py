@@ -120,6 +120,20 @@ def _build_orchestration_instructions() -> str:
     )
 
 
+def _gtm_defaults(account_id: str, container_id: str) -> tuple[str, str]:
+    """Fall back to configured GTM defaults when ids are omitted."""
+    cfg = current_config().gtm
+    account_id = account_id or cfg.account_id
+    container_id = container_id or cfg.container_id
+    if not account_id or not container_id:
+        raise ValueError(
+            "gtm_account_id and gtm_container_id are required — pass them "
+            "explicitly (see list_gtm_accounts / list_gtm_containers) or set "
+            "gtm.account_id / gtm.container_id in the config."
+        )
+    return account_id, container_id
+
+
 mcp = FastMCP(
     "AdLoop",
     instructions=_build_orchestration_instructions(),
@@ -157,10 +171,15 @@ def _structured_error(fn_name: str, exc: Exception) -> dict:
         }
 
     if "invalid_grant" in err_lower or "revoked" in err_lower:
+        from adloop.runtime import deployment_mode
+
         return {
             "error": "Authentication failed — OAuth token expired or revoked.",
             "hint": (
-                "Delete ~/.adloop/token.json and re-run any tool to "
+                "Reconnect Google in your AdLoop Cloud dashboard "
+                "(Settings → Google), then retry."
+                if deployment_mode() == "server"
+                else "Delete ~/.adloop/token.json and re-run any tool to "
                 "trigger re-authorization. If this keeps happening, "
                 "publish the GCP consent screen to 'In production'."
             ),
@@ -191,17 +210,24 @@ def _structured_error(fn_name: str, exc: Exception) -> dict:
         or "insufficient_scope" in err_lower
         or "act_insufficient_permission" in err_lower
     ):
+        from adloop.runtime import deployment_mode as _deployment_mode
+
         return {
             "error": (
                 "Authorization failed — the stored OAuth token lacks a "
                 "required scope."
             ),
             "hint": (
-                "This token was granted before a newer API scope was added "
-                "(e.g. Tag Manager). Delete ~/.adloop/token.json and re-run "
-                "any tool to re-consent with the full scope set. For GTM "
-                "also ensure the Tag Manager API is enabled in your GCP "
-                "project and your account has container access."
+                "Your Google connection predates a newer permission (e.g. "
+                "Tag Manager or Search Console). Reconnect Google in your "
+                "AdLoop Cloud dashboard (Settings → Google) and leave all "
+                "permission boxes ticked."
+                if _deployment_mode() == "server"
+                else "This token was granted before a newer API scope was "
+                "added (e.g. Tag Manager or Search Console). Delete "
+                "~/.adloop/token.json and re-run any tool to re-consent "
+                "with the full scope set. Also ensure the corresponding "
+                "API is enabled in your GCP project."
             ),
             "auth_error": "INSUFFICIENT_SCOPES",
         }
@@ -417,6 +443,70 @@ def get_tracking_events(
         property_id=property_id or current_config().ga4.property_id,
         date_range_start=date_range_start,
         date_range_end=date_range_end,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Google Search Console Read Tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def list_gsc_sites() -> dict:
+    """List all Google Search Console properties the authenticated user can access.
+
+    Use this first to discover which site URLs are available before running
+    search analytics reports. Returns the site URL and permission level for
+    each property.
+    """
+    from adloop.gsc.reports import list_gsc_sites as _impl
+
+    return _impl(current_config())
+
+
+@mcp.tool(annotations=_READONLY)
+@_safe
+def run_gsc_report(
+    site_url: str = "",
+    dimensions: _StrListOpt = None,
+    date_range_start: str = "7daysAgo",
+    date_range_end: str = "today",
+    limit: int = 100,
+    search_type: str = "web",
+    dimension_filter_groups: _DictListOpt = None,
+) -> dict:
+    """Run a Google Search Console search analytics report.
+
+    Returns clicks, impressions, CTR, and average position broken down by
+    the requested dimensions. Useful for diagnosing organic traffic drops,
+    finding keyword opportunities, and cross-referencing with GA4 and Ads data.
+
+    site_url: the GSC property URL (e.g. "https://example.com/" or
+        "sc-domain:example.com"). Defaults to gsc.site_url in config.yaml.
+    dimensions: one or more of ["query", "page", "country", "device", "date"].
+        Defaults to ["query"].
+    date_range_start / date_range_end: ISO dates (YYYY-MM-DD) or relative
+        values like "7daysAgo", "30daysAgo", "today".
+    search_type: "web" (default), "image", "video", "news", "discover",
+        or "googleNews".
+    dimension_filter_groups: optional GSC DimensionFilterGroup list to filter
+        by query, page, country, or device. Example:
+        [{"filters": [{"dimension": "query", "operator": "contains",
+                       "expression": "analytics"}]}]
+    limit: maximum rows to return (default 100, max 25000).
+    """
+    from adloop.gsc.reports import run_gsc_report as _impl
+
+    return _impl(
+        current_config(),
+        site_url=site_url,
+        dimensions=dimensions,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        limit=limit,
+        search_type=search_type,
+        dimension_filter_groups=dimension_filter_groups,
     )
 
 
@@ -904,8 +994,8 @@ def attribution_check(
 @_safe
 def audit_event_coverage(
     expected_events: list[str],
-    gtm_account_id: str,
-    gtm_container_id: str,
+    gtm_account_id: str = "",
+    gtm_container_id: str = "",
     property_id: str = "",
     date_range_start: str = "",
     date_range_end: str = "",
@@ -938,6 +1028,10 @@ def audit_event_coverage(
     """
     from adloop.crossref import audit_event_coverage as _impl
 
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
+
     return _impl(
         current_config(),
         expected_events=expected_events,
@@ -966,7 +1060,7 @@ def list_gtm_accounts() -> dict:
 
 @mcp.tool(annotations=_READONLY)
 @_safe
-def list_gtm_containers(gtm_account_id: str) -> dict:
+def list_gtm_containers(gtm_account_id: str = "") -> dict:
     """List all containers under a GTM account.
 
     Returns container_id (the numeric ID needed by audit_event_coverage),
@@ -975,12 +1069,18 @@ def list_gtm_containers(gtm_account_id: str) -> dict:
     """
     from adloop.gtm.read import list_containers as _impl
 
+    gtm_account_id = gtm_account_id or current_config().gtm.account_id
+    if not gtm_account_id:
+        raise ValueError(
+            "gtm_account_id is required — call list_gtm_accounts first or "
+            "set gtm.account_id in the config."
+        )
     return _impl(current_config(), account_id=gtm_account_id)
 
 
 @mcp.tool(annotations=_READONLY)
 @_safe
-def list_gtm_tags(gtm_account_id: str, gtm_container_id: str) -> dict:
+def list_gtm_tags(gtm_account_id: str = "", gtm_container_id: str = "") -> dict:
     """List every tag in the LIVE GTM container.
 
     Each tag includes type, status, parsed parameters, the GA4 event name
@@ -988,6 +1088,10 @@ def list_gtm_tags(gtm_account_id: str, gtm_container_id: str) -> dict:
     Use after audit_event_coverage to inspect specific tags.
     """
     from adloop.gtm.read import list_tags as _impl
+
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
 
     return _impl(
         current_config(), account_id=gtm_account_id, container_id=gtm_container_id
@@ -997,7 +1101,7 @@ def list_gtm_tags(gtm_account_id: str, gtm_container_id: str) -> dict:
 @mcp.tool(annotations=_READONLY)
 @_safe
 def get_gtm_tag(
-    gtm_account_id: str, gtm_container_id: str, tag_id: str
+    tag_id: str, gtm_account_id: str = "", gtm_container_id: str = ""
 ) -> dict:
     """Get the full RAW configuration for a single GTM tag.
 
@@ -1006,6 +1110,10 @@ def get_gtm_tag(
     monitoring metadata. Use to inspect a tag flagged by audit_event_coverage.
     """
     from adloop.gtm.read import get_tag as _impl
+
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
 
     return _impl(
         current_config(),
@@ -1017,7 +1125,7 @@ def get_gtm_tag(
 
 @mcp.tool(annotations=_READONLY)
 @_safe
-def list_gtm_triggers(gtm_account_id: str, gtm_container_id: str) -> dict:
+def list_gtm_triggers(gtm_account_id: str = "", gtm_container_id: str = "") -> dict:
     """List every trigger in the LIVE GTM container.
 
     Each trigger has its filter conditions parsed to readable text
@@ -1025,6 +1133,10 @@ def list_gtm_triggers(gtm_account_id: str, gtm_container_id: str) -> dict:
     diagnose why a tag fires or doesn't fire on specific pages.
     """
     from adloop.gtm.read import list_triggers as _impl
+
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
 
     return _impl(
         current_config(), account_id=gtm_account_id, container_id=gtm_container_id
@@ -1034,7 +1146,7 @@ def list_gtm_triggers(gtm_account_id: str, gtm_container_id: str) -> dict:
 @mcp.tool(annotations=_READONLY)
 @_safe
 def get_gtm_trigger(
-    gtm_account_id: str, gtm_container_id: str, trigger_id: str
+    trigger_id: str, gtm_account_id: str = "", gtm_container_id: str = ""
 ) -> dict:
     """Get the full RAW configuration for a single GTM trigger.
 
@@ -1043,6 +1155,10 @@ def get_gtm_trigger(
     diagnose why a tag with a specific trigger ID does or doesn't fire.
     """
     from adloop.gtm.read import get_trigger as _impl
+
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
 
     return _impl(
         current_config(),
@@ -1054,7 +1170,7 @@ def get_gtm_trigger(
 
 @mcp.tool(annotations=_READONLY)
 @_safe
-def list_gtm_variables(gtm_account_id: str, gtm_container_id: str) -> dict:
+def list_gtm_variables(gtm_account_id: str = "", gtm_container_id: str = "") -> dict:
     """List GTM variables — both custom and enabled built-in.
 
     Custom variables come from the live container. Built-in variables
@@ -1065,6 +1181,10 @@ def list_gtm_variables(gtm_account_id: str, gtm_container_id: str) -> dict:
     """
     from adloop.gtm.read import list_variables as _impl
 
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
+
     return _impl(
         current_config(), account_id=gtm_account_id, container_id=gtm_container_id
     )
@@ -1072,7 +1192,7 @@ def list_gtm_variables(gtm_account_id: str, gtm_container_id: str) -> dict:
 
 @mcp.tool(annotations=_READONLY)
 @_safe
-def list_gtm_workspaces(gtm_account_id: str, gtm_container_id: str) -> dict:
+def list_gtm_workspaces(gtm_account_id: str = "", gtm_container_id: str = "") -> dict:
     """List workspaces (drafts) under a GTM container.
 
     Workspace IDs are needed for `get_gtm_workspace_diff`. Most containers
@@ -1080,6 +1200,10 @@ def list_gtm_workspaces(gtm_account_id: str, gtm_container_id: str) -> dict:
     team uses parallel drafts.
     """
     from adloop.gtm.read import list_workspaces as _impl
+
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
 
     return _impl(
         current_config(), account_id=gtm_account_id, container_id=gtm_container_id
@@ -1089,7 +1213,7 @@ def list_gtm_workspaces(gtm_account_id: str, gtm_container_id: str) -> dict:
 @mcp.tool(annotations=_READONLY)
 @_safe
 def get_gtm_workspace_diff(
-    gtm_account_id: str, gtm_container_id: str, workspace_id: str
+    workspace_id: str, gtm_account_id: str = "", gtm_container_id: str = ""
 ) -> dict:
     """Show drafted-but-not-published changes in a GTM workspace.
 
@@ -1100,6 +1224,10 @@ def get_gtm_workspace_diff(
     no pending changes and no conflicts.
     """
     from adloop.gtm.read import get_workspace_diff as _impl
+
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
 
     return _impl(
         current_config(),
@@ -1112,7 +1240,7 @@ def get_gtm_workspace_diff(
 @mcp.tool(annotations=_READONLY)
 @_safe
 def list_gtm_versions(
-    gtm_account_id: str, gtm_container_id: str, page_size: int = 50
+    gtm_account_id: str = "", gtm_container_id: str = "", page_size: int = 50
 ) -> dict:
     """List published GTM version history (newest first).
 
@@ -1122,6 +1250,10 @@ def list_gtm_versions(
     for full content + author info.
     """
     from adloop.gtm.read import list_versions as _impl
+
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
 
     return _impl(
         current_config(),
@@ -1134,7 +1266,7 @@ def list_gtm_versions(
 @mcp.tool(annotations=_READONLY)
 @_safe
 def get_gtm_version(
-    gtm_account_id: str, gtm_container_id: str, container_version_id: str
+    container_version_id: str, gtm_account_id: str = "", gtm_container_id: str = ""
 ) -> dict:
     """Get full metadata + entity counts for a single GTM container version.
 
@@ -1143,6 +1275,10 @@ def get_gtm_version(
     when correlating a metric drop with a specific publish.
     """
     from adloop.gtm.read import get_version as _impl
+
+    gtm_account_id, gtm_container_id = _gtm_defaults(
+        gtm_account_id, gtm_container_id
+    )
 
     return _impl(
         current_config(),

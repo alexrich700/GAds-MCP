@@ -218,6 +218,31 @@ class TestServerModeGates:
         with pytest.raises(RuntimeError, match="server mode"):
             get_gtm_credentials(AdLoopConfig())
 
+    def test_local_gsc_credentials_refuse_server_mode(self):
+        from adloop.auth import get_gsc_credentials
+
+        runtime.set_deployment_mode("server")
+        with pytest.raises(RuntimeError, match="server mode"):
+            get_gsc_credentials(AdLoopConfig())
+
+    def test_provider_without_gsc_support_fails_with_capability_error(self):
+        from adloop import auth
+
+        class _NoGscProvider:
+            def ga4_credentials(self, config):  # pragma: no cover
+                raise AssertionError("not exercised")
+
+            def ads_credentials(self, config):  # pragma: no cover
+                raise AssertionError("not exercised")
+
+        original = auth.get_credentials_provider()
+        auth.set_credentials_provider(_NoGscProvider())
+        try:
+            with pytest.raises(RuntimeError, match="does not support"):
+                auth.get_gsc_credentials(AdLoopConfig())
+        finally:
+            auth.set_credentials_provider(original)
+
     def test_provider_without_gtm_support_fails_with_capability_error(self):
         """A provider that predates GTM (e.g. a hosted deployment that
         hasn't rolled it out) must produce a clear capability error, not an

@@ -19,13 +19,13 @@ An MCP server that gives your AI assistant read + write access to Google Ads and
 </div>
 
 > [!TIP]
-> **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the same 61 tools from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
+> **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the same 63 tools from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
 
 ---
 
 ## Cloud or Self-Hosted?
 
-Both versions run the same 61 tools with the same safety model. The difference is who handles the plumbing:
+Both versions run the same 63 tools with the same safety model. The difference is who handles the plumbing:
 
 |  | ☁️ [AdLoop Cloud](https://getadloop.com) | 🛠️ Self-hosted (this repo) |
 |---|---|---|
@@ -63,7 +63,7 @@ Every tool exists because of an actual problem hit while running real Google Ads
 
 The best features come from real workflows. If you're using AdLoop and find yourself wishing it could do something it can't, **open an issue describing your situation** — not just "add feature X" but "I was trying to do Y and couldn't because Z." The context matters more than the request.
 
-## All 61 Tools
+## All 63 Tools
 
 > **Quick start:** `pip install adloop` or `git clone https://github.com/kLOsk/adloop.git && cd adloop && uv sync && uv run adloop init` — or zero setup on [AdLoop Cloud](https://getadloop.com)
 
@@ -142,6 +142,15 @@ These tools read the live GTM container and join it with the codebase + GA4 to f
 | `get_gtm_version` | Full metadata + tag/trigger names for a single historical container version |
 
 > **Setup for GTM tools** — Enable the **Tag Manager API v2** in your GCP project, then add your AdLoop credentials' email (the OAuth user, or the service account email if using a service account) as a **Read** user on the GTM container under Admin → User Management. Service accounts pick up access on the next call. **OAuth users upgrading from an earlier AdLoop version must re-authorize once**: the GTM scope is new, so delete `~/.adloop/token.json` and run any tool to re-consent — until then GTM tools return a permissions error.
+
+### Search Console Tools
+
+| Tool | What It Does |
+|------|-------------|
+| `list_gsc_sites` | List Search Console properties the connected account can access |
+| `run_gsc_report` | Organic search analytics — clicks, impressions, CTR, position by query/page/country/device/date |
+
+> **Setup for GSC tools** — Enable the **Search Console API** in your GCP project. Upgrading OAuth users must re-authorize once for the new scope (delete `~/.adloop/token.json`, run any tool). The killer combo: cross-reference organic queries with `get_keyword_performance` to find paid/organic cannibalization and untapped keyword opportunities.
 
 ### Planning Tools
 
@@ -397,7 +406,7 @@ All configuration lives in `~/.adloop/config.yaml`. See [`config.yaml.example`](
 ```
 src/adloop/
 ├── __init__.py        # Entry point — routes 'adloop init' to wizard, otherwise starts MCP server
-├── server.py          # FastMCP server — 61 tool registrations with safety annotations
+├── server.py          # FastMCP server — 63 tool registrations with safety annotations
 ├── config.py          # Config loader (~/.adloop/config.yaml)
 ├── auth.py            # OAuth 2.0 flow (user-supplied credentials, headless fallback) + service accounts; GA4 / Ads / GTM scopes
 ├── cli.py             # Interactive 'adloop init' setup wizard

@@ -92,6 +92,23 @@ These tools call both APIs internally and return unified results with computed `
 
 **GTM prerequisites:** the Tag Manager API must be enabled in the user's GCP project and their account needs at least Read access on the container. OAuth tokens granted before the GTM scope existed must be re-consented (delete `~/.adloop/token.json`, re-run any tool) — an `INSUFFICIENT_SCOPES` structured error means exactly that.
 
+### Google Search Console Read Tools (all read-only)
+
+| Tool | When to Use | Key Parameters |
+|------|-------------|----------------|
+| `list_gsc_sites` | First-time discovery — which GSC properties the connected account can access | (none) |
+| `run_gsc_report` | Organic search analytics — clicks, impressions, CTR, avg position by query/page/country/device/date | `site_url` (falls back to `gsc.site_url` config), `dimensions`, date range (ISO or "28daysAgo"), `dimension_filter_groups`, `search_type` |
+
+**GSC prerequisites:** the Search Console API must be enabled in the user's GCP project and their Google account needs access to the property in Search Console. Tokens granted before the GSC scope existed must re-consent (`INSUFFICIENT_SCOPES` error tells the user how). Property formats: `https://example.com/` (URL-prefix) vs `sc-domain:example.com` (domain property) — use `list_gsc_sites` rather than guessing.
+
+### When user asks about organic traffic, SEO, or paid/organic overlap
+
+1. Call `list_gsc_sites` if no site is configured; confirm the property with the user
+2. **Paid/organic cannibalization** ("am I paying for clicks I'd get anyway?"): pull `run_gsc_report` with `dimensions=["query"]` and `get_keyword_performance` for the same window. Flag queries where organic position ≤ 3 AND a paid keyword also serves — quantify the paid spend on those queries as potential savings, but warn that pausing brand keywords can still lose total clicks (competitors bid on brands; incrementality varies)
+3. **Keyword mining** ("what should I bid on?"): organic queries with high impressions but position > 5 are demand you're not capturing — cross-check against `get_keyword_performance` to skip terms already covered, then propose via `draft_keywords`
+4. **Organic drop diagnosis**: `run_gsc_report` with `dimensions=["date"]` to find the drop date, then `dimensions=["page"]` filtered to the window to find which pages lost — cross-reference with `list_gtm_versions` (a publish near the drop date) and GA4
+5. GSC data lags ~2 days — never compare a GSC window against an Ads/GA4 window that includes yesterday
+
 ### When user asks "is everything tagged correctly" or wants a GTM audit
 
 1. Search the codebase for `gtag('event', ...)` and `dataLayer.push({event: ...})` calls; extract every distinct event name
