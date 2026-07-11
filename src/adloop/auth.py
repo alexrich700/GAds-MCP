@@ -28,6 +28,7 @@ _ALL_SCOPES = [
     "https://www.googleapis.com/auth/adwords",
     "https://www.googleapis.com/auth/tagmanager.readonly",
     "https://www.googleapis.com/auth/webmasters.readonly",
+    "https://www.googleapis.com/auth/content",
 ]
 
 _GA4_SCOPES = [
@@ -44,6 +45,12 @@ _GTM_SCOPES = [
 
 _GSC_SCOPES = [
     "https://www.googleapis.com/auth/webmasters.readonly",
+]
+
+# Content API has no read-only variant — this is its only scope. AdLoop's
+# merchant tools use it read-only.
+_MERCHANT_SCOPES = [
+    "https://www.googleapis.com/auth/content",
 ]
 
 
@@ -63,6 +70,8 @@ class CredentialsProvider(Protocol):
     def gtm_credentials(self, config: AdLoopConfig) -> Credentials: ...
 
     def gsc_credentials(self, config: AdLoopConfig) -> Credentials: ...
+
+    def merchant_credentials(self, config: AdLoopConfig) -> Credentials: ...
 
 
 class LocalFileCredentialsProvider:
@@ -98,6 +107,10 @@ class LocalFileCredentialsProvider:
     def gsc_credentials(self, config: AdLoopConfig) -> Credentials:
         self._guard_local_only()
         return _local_credentials(config, _GSC_SCOPES)
+
+    def merchant_credentials(self, config: AdLoopConfig) -> Credentials:
+        self._guard_local_only()
+        return _local_credentials(config, _MERCHANT_SCOPES)
 
 
 _active_provider: CredentialsProvider = LocalFileCredentialsProvider()
@@ -198,6 +211,18 @@ def get_gsc_credentials(config: AdLoopConfig) -> Credentials:
             "the provider implements gsc_credentials()."
         )
     return provider.gsc_credentials(config)
+
+
+def get_merchant_credentials(config: AdLoopConfig) -> Credentials:
+    """Return authenticated credentials for the Content API (Merchant Center)."""
+    provider = _active_provider
+    if not hasattr(provider, "merchant_credentials"):
+        raise RuntimeError(
+            "This deployment's credentials provider does not support "
+            "Google Merchant Center. Merchant tools are only available "
+            "where the provider implements merchant_credentials()."
+        )
+    return provider.merchant_credentials(config)
 
 
 def _oauth_flow(

@@ -113,6 +113,17 @@ These tools call both APIs internally and return unified results with computed `
 - Field (CrUX) data is real Chrome users over 28 days; lab data is simulated. When they disagree, trust field. Missing field data means low traffic, not a healthy page.
 - Pairs with `landing_page_analysis`: pages with traffic but no conversions + a bad performance score = fix speed before touching ad copy.
 
+### Merchant Center Read Tools (all read-only)
+
+| Tool | When to Use | Key Parameters |
+|------|-------------|----------------|
+| `list_merchant_accounts` | Discovery — which Merchant Center accounts the connected user can reach | (none) |
+| `get_merchant_feed_health` | Shopping/PMax underperforming or dead — check feed disapprovals FIRST, before touching bids/budgets | `merchant_id` (numeric; from list_merchant_accounts), `account_id` (MCA sub-accounts only) |
+
+- **Disapproved feed items are the #1 silent PMax/Shopping killer.** When a Shopping or PMax campaign has impressions collapsing or zero delivery, check `get_merchant_feed_health` before any campaign-side diagnosis.
+- The Content API has no read-only scope; AdLoop's merchant tools are read-only by design — never propose feed edits through these tools.
+- Item issues come ranked by affected products and include Google's resolution documentation links — surface the top 3 with their doc links.
+
 ### When user asks about organic traffic, SEO, or paid/organic overlap
 
 1. Call `list_gsc_sites` if no site is configured; confirm the property with the user

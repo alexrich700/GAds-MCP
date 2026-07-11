@@ -243,6 +243,31 @@ class TestServerModeGates:
         finally:
             auth.set_credentials_provider(original)
 
+    def test_local_merchant_credentials_refuse_server_mode(self):
+        from adloop.auth import get_merchant_credentials
+
+        runtime.set_deployment_mode("server")
+        with pytest.raises(RuntimeError, match="server mode"):
+            get_merchant_credentials(AdLoopConfig())
+
+    def test_provider_without_merchant_support_fails_with_capability_error(self):
+        from adloop import auth
+
+        class _NoMerchantProvider:
+            def ga4_credentials(self, config):  # pragma: no cover
+                raise AssertionError("not exercised")
+
+            def ads_credentials(self, config):  # pragma: no cover
+                raise AssertionError("not exercised")
+
+        original = auth.get_credentials_provider()
+        auth.set_credentials_provider(_NoMerchantProvider())
+        try:
+            with pytest.raises(RuntimeError, match="does not support"):
+                auth.get_merchant_credentials(AdLoopConfig())
+        finally:
+            auth.set_credentials_provider(original)
+
     def test_provider_without_gtm_support_fails_with_capability_error(self):
         """A provider that predates GTM (e.g. a hosted deployment that
         hasn't rolled it out) must produce a clear capability error, not an
