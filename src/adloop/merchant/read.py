@@ -1,6 +1,6 @@
 """Merchant Center read tools — account discovery + feed health.
 
-Read-only use of the Content API (Google offers no read-only scope for
+Read-only use of the Merchant API (Google offers no read-only scope for
 it). This is the minimal slice of the Merchant Center integration: which
 accounts exist, and whether products are actually serving — disapproved
 feed items are the most common silent killer of Shopping/PMax campaigns.
@@ -16,23 +16,24 @@ if TYPE_CHECKING:
 
 def list_merchant_accounts(config: AdLoopConfig) -> dict:
     """List Merchant Center accounts the connected Google user can access."""
-    from adloop.merchant.client import get_merchant_client
+    from adloop.merchant.client import merchant_get
 
-    client = get_merchant_client(config)
-    info = client.accounts().authinfo().execute()
-
-    accounts = []
-    for ident in info.get("accountIdentifiers", []):
-        if ident.get("merchantId"):
+    accounts: list[dict] = []
+    page_token = ""
+    while True:
+        params = {"pageToken": page_token} if page_token else {}
+        payload = merchant_get(config, "accounts", params)
+        for account in payload.get("accounts", []):
+            name = account.get("name", "")
             accounts.append({
-                "merchant_id": ident["merchantId"],
-                "type": "standalone",
+                "account_id": account.get("accountId")
+                or name.removeprefix("accounts/"),
+                "name": account.get("accountName", ""),
+                "test_account": bool(account.get("testAccount", False)),
             })
-        elif ident.get("aggregatorId"):
-            accounts.append({
-                "merchant_id": ident["aggregatorId"],
-                "type": "aggregator (MCA)",
-            })
+        page_token = payload.get("nextPageToken") or ""
+        if not page_token:
+            break
 
     insights = []
     if not accounts:
@@ -47,76 +48,72 @@ def list_merchant_accounts(config: AdLoopConfig) -> dict:
 def get_merchant_feed_health(
     config: AdLoopConfig,
     *,
-    merchant_id: str = "",
     account_id: str = "",
 ) -> dict:
     """Feed health for a Merchant Center account — disapprovals + issues.
 
-    account_id defaults to merchant_id (standalone accounts). For
-    sub-accounts under an MCA, pass the MCA as merchant_id and the
-    sub-account as account_id.
+    Combines aggregateProductStatuses (per reporting-context counts of
+    approved/pending/disapproved products plus the product issues behind
+    them) with account-level issues that can suspend the whole account.
     """
-    from adloop.merchant.client import get_merchant_client
+    from adloop.merchant.client import merchant_get
 
-    merchant_id = str(merchant_id or "").strip()
-    if not merchant_id.isdigit():
+    account_id = str(account_id or "").strip()
+    if not account_id.isdigit():
         return {
-            "error": "merchant_id must be a numeric Merchant Center ID — "
+            "error": "account_id must be a numeric Merchant Center ID — "
                      "call list_merchant_accounts first."
         }
-    account_id = str(account_id or "").strip() or merchant_id
-    if not account_id.isdigit():
-        return {"error": "account_id must be a numeric Merchant Center ID."}
 
-    client = get_merchant_client(config)
-    status = (
-        client.accountstatuses()
-        .get(merchantId=merchant_id, accountId=account_id)
-        .execute()
+    statuses = merchant_get(
+        config, f"accounts/{account_id}/aggregateProductStatuses"
     )
+    issues_payload = merchant_get(config, f"accounts/{account_id}/issues")
 
     account_issues = [
         {
             "title": issue.get("title", ""),
             "severity": issue.get("severity", ""),
-            "country": issue.get("country", ""),
-            "documentation": issue.get("documentation", ""),
+            "detail": issue.get("detail", ""),
+            "reporting_contexts": sorted({
+                dest.get("reportingContext", "")
+                for dest in issue.get("impactedDestinations", [])
+                if dest.get("reportingContext")
+            }),
+            "documentation": issue.get("documentationUri", ""),
         }
-        for issue in status.get("accountLevelIssues", [])
+        for issue in issues_payload.get("accountIssues", [])
     ]
 
-    destinations = []
+    contexts = []
     top_item_issues: list[dict] = []
-    totals = {"active": 0, "pending": 0, "disapproved": 0, "expiring": 0}
-    for product in status.get("products", []):
-        stats = product.get("statistics", {}) or {}
+    totals = {"approved": 0, "pending": 0, "disapproved": 0}
+    for status in statuses.get("aggregateProductStatuses", []):
+        stats = status.get("statistics", {}) or {}
         entry = {
-            "destination": product.get("destination", ""),
-            "channel": product.get("channel", ""),
-            "country": product.get("country", ""),
-            "active": int(stats.get("active", 0)),
-            "pending": int(stats.get("pending", 0)),
-            "disapproved": int(stats.get("disapproved", 0)),
-            "expiring": int(stats.get("expiring", 0)),
+            "reporting_context": status.get("reportingContext", ""),
+            "country": status.get("countryCode", ""),
+            "approved": int(stats.get("approvedCount", 0) or 0),
+            "pending": int(stats.get("pendingCount", 0) or 0),
+            "disapproved": int(stats.get("disapprovedCount", 0) or 0),
         }
-        destinations.append(entry)
-        for key in totals:
-            totals[key] += entry[key]
-        for issue in product.get("itemLevelIssues", []):
+        contexts.append(entry)
+        totals["approved"] += entry["approved"]
+        totals["pending"] += entry["pending"]
+        totals["disapproved"] += entry["disapproved"]
+        for issue in status.get("issues", []):
             top_item_issues.append({
-                "destination": product.get("destination", ""),
-                "code": issue.get("code", ""),
-                "description": issue.get("description", ""),
-                "severity": issue.get("servability", "")
-                or issue.get("severity", ""),
-                "affected_items": int(issue.get("numItems", 0)),
-                "resolution": issue.get("resolution", ""),
-                "documentation": issue.get("documentation", ""),
+                "reporting_context": status.get("reportingContext", ""),
+                "issue": issue.get("issueType", "")
+                or issue.get("title", ""),
+                "severity": issue.get("severity", ""),
+                "affected_products": int(issue.get("numProducts", 0) or 0),
+                "documentation": issue.get("documentationUri", ""),
             })
-    top_item_issues.sort(key=lambda i: i["affected_items"], reverse=True)
+    top_item_issues.sort(key=lambda i: i["affected_products"], reverse=True)
 
     insights = []
-    serving_total = totals["active"] + totals["pending"] + totals["disapproved"]
+    serving_total = sum(totals.values())
     if serving_total and totals["disapproved"] > 0:
         pct = round(totals["disapproved"] / serving_total * 100, 1)
         insights.append(
@@ -125,21 +122,22 @@ def get_merchant_feed_health(
             f"Performance Max campaigns. Fix the top issues below before "
             f"touching bids or budgets."
         )
-    error_issues = [i for i in account_issues if i["severity"] == "error"]
-    if error_issues:
+    critical = [
+        i for i in account_issues if i["severity"] in ("CRITICAL", "ERROR")
+    ]
+    if critical:
         insights.append(
-            f"{len(error_issues)} account-level error(s) — these can "
-            f"suspend the whole account: "
-            + "; ".join(i["title"] for i in error_issues[:3])
+            f"{len(critical)} account-level issue(s) at ERROR/CRITICAL "
+            f"severity — CRITICAL means offers stop serving entirely: "
+            + "; ".join(i["title"] for i in critical[:3])
         )
     if not account_issues and not totals["disapproved"]:
         insights.append("No disapprovals or account issues — feed is healthy.")
 
     return {
-        "merchant_id": merchant_id,
         "account_id": account_id,
         "totals": totals,
-        "by_destination": destinations,
+        "by_reporting_context": contexts,
         "account_issues": account_issues,
         "top_item_issues": top_item_issues[:15],
         "insights": insights,

@@ -160,10 +160,10 @@ These tools read the live GTM container and join it with the codebase + GA4 to f
 
 | Tool | What It Does |
 |------|-------------|
-| `list_merchant_accounts` | Discover accessible Merchant Center accounts (standalone + MCA) |
-| `get_merchant_feed_health` | Feed health — disapproved product counts per destination, top item issues with fixes, account-level errors. Disapprovals silently starve Shopping/PMax. |
+| `list_merchant_accounts` | Discover accessible Merchant Center accounts |
+| `get_merchant_feed_health` | Feed health — approved/pending/disapproved counts per reporting context, top product issues with docs, account-level issues. Disapprovals silently starve Shopping/PMax. |
 
-> **Setup for Merchant Center tools** — Enable the **Content API for Shopping** in your GCP project. The Content API has no read-only scope; AdLoop uses it strictly read-only. Upgrading OAuth users re-authorize once.
+> **Setup for Merchant Center tools** — Enable the **Merchant API** in your GCP project (the Content API for Shopping is deprecated). The Merchant API has no read-only scope; AdLoop uses it strictly read-only. Upgrading OAuth users re-authorize once.
 
 > **Setup for GSC tools** — Enable the **Search Console API** in your GCP project. Upgrading OAuth users must re-authorize once for the new scope (delete `~/.adloop/token.json`, run any tool). The killer combo: cross-reference organic queries with `get_keyword_performance` to find paid/organic cannibalization and untapped keyword opportunities.
 

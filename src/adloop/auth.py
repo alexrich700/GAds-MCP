@@ -47,8 +47,8 @@ _GSC_SCOPES = [
     "https://www.googleapis.com/auth/webmasters.readonly",
 ]
 
-# Content API has no read-only variant — this is its only scope. AdLoop's
-# merchant tools use it read-only.
+# The Merchant API (Content API successor) has no read-only variant —
+# this is its only scope. AdLoop's merchant tools use it read-only.
 _MERCHANT_SCOPES = [
     "https://www.googleapis.com/auth/content",
 ]
@@ -214,7 +214,7 @@ def get_gsc_credentials(config: AdLoopConfig) -> Credentials:
 
 
 def get_merchant_credentials(config: AdLoopConfig) -> Credentials:
-    """Return authenticated credentials for the Content API (Merchant Center)."""
+    """Return authenticated credentials for the Merchant API (Merchant Center)."""
     provider = _active_provider
     if not hasattr(provider, "merchant_credentials"):
         raise RuntimeError(

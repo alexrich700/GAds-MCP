@@ -549,22 +549,21 @@ def list_merchant_accounts() -> dict:
 
 @mcp.tool(annotations=_READONLY)
 @_safe
-def get_merchant_feed_health(merchant_id: str, account_id: str = "") -> dict:
+def get_merchant_feed_health(account_id: str) -> dict:
     """Merchant Center feed health — disapproved products + account issues.
 
     Disapproved feed items silently starve Shopping and Performance Max
-    campaigns; this surfaces disapproval counts per destination, the top
-    item-level issues by affected products (with resolution docs), and
-    account-level errors that can suspend the whole account.
+    campaigns; this surfaces approved/pending/disapproved counts per
+    reporting context (Shopping ads, free listings, ...), the top product
+    issues by affected products (with documentation links), and
+    account-level issues — CRITICAL ones stop offers serving entirely.
 
-    For MCA sub-accounts pass the MCA as merchant_id and the sub-account
-    as account_id; standalone accounts need only merchant_id.
+    account_id: numeric Merchant Center ID from list_merchant_accounts.
+    Product-status data lags reality by ~30 minutes.
     """
     from adloop.merchant.read import get_merchant_feed_health as _impl
 
-    return _impl(
-        current_config(), merchant_id=merchant_id, account_id=account_id
-    )
+    return _impl(current_config(), account_id=account_id)
 
 
 @mcp.tool(annotations=_READONLY)

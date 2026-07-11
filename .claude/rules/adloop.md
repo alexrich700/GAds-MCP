@@ -116,10 +116,10 @@ These tools call both APIs internally and return unified results with computed `
 | Tool | When to Use | Key Parameters |
 |------|-------------|----------------|
 | `list_merchant_accounts` | Discovery — which Merchant Center accounts the connected user can reach | (none) |
-| `get_merchant_feed_health` | Shopping/PMax underperforming or dead — check feed disapprovals FIRST, before touching bids/budgets | `merchant_id` (numeric; from list_merchant_accounts), `account_id` (MCA sub-accounts only) |
+| `get_merchant_feed_health` | Shopping/PMax underperforming or dead — check feed disapprovals FIRST, before touching bids/budgets | `account_id` (numeric; from list_merchant_accounts) |
 
 - **Disapproved feed items are the #1 silent PMax/Shopping killer.** When a Shopping or PMax campaign has impressions collapsing or zero delivery, check `get_merchant_feed_health` before any campaign-side diagnosis.
-- The Content API has no read-only scope; AdLoop's merchant tools are read-only by design — never propose feed edits through these tools.
+- The Merchant API has no read-only scope; AdLoop's merchant tools are read-only by design — never propose feed edits through these tools. Product-status data lags ~30 minutes — say so when the user just changed the feed.
 - Item issues come ranked by affected products and include Google's resolution documentation links — surface the top 3 with their doc links.
 
 ### When user asks about organic traffic, SEO, or paid/organic overlap
