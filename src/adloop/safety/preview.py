@@ -47,6 +47,11 @@ class PlanStore(Protocol):
     Every operation is scoped by tenant so that in a multi-tenant server
     one tenant can never look up — let alone apply — another tenant's
     pending mutation, even with a known plan_id.
+
+    ``store`` MUST overwrite an existing plan with the same
+    ``(tenant, plan_id)``: confirm_and_apply re-stores a plan after a
+    dry-run pass to persist ``dry_run_result``, which two-phase apply
+    checks before allowing a real write.
     """
 
     def store(self, tenant: str, plan: ChangePlan) -> None: ...

@@ -53,6 +53,11 @@ class SafetyConfig:
     max_daily_budget: float = 50.0
     max_bid_increase_pct: int = 100
     require_dry_run: bool = True
+    # Two-phase apply: confirm_and_apply refuses dry_run=false for a plan
+    # that has not completed a dry-run pass yet. Unlike require_dry_run
+    # (which blocks real writes entirely), this only enforces the order:
+    # preview first, apply second.
+    two_phase_apply: bool = False
     log_file: str = "~/.adloop/audit.log"
     blocked_operations: list[str] = field(default_factory=list)
 
@@ -133,6 +138,7 @@ def load_config(config_path: str | None = None) -> AdLoopConfig:
             max_daily_budget=safety_raw.get("max_daily_budget", 50.0),
             max_bid_increase_pct=safety_raw.get("max_bid_increase_pct", 100),
             require_dry_run=safety_raw.get("require_dry_run", True),
+            two_phase_apply=safety_raw.get("two_phase_apply", False),
             log_file=safety_raw.get("log_file", "~/.adloop/audit.log"),
             blocked_operations=safety_raw.get("blocked_operations", []),
         ),

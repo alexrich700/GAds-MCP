@@ -72,6 +72,11 @@ safety:
   # Set to false only when you're ready to make real changes.
   require_dry_run: true
 
+  # Two-phase apply: confirm_and_apply refuses dry_run=false for any plan
+  # that has not completed a dry-run pass first. Enforces the order
+  # (preview, then apply) without blocking real writes entirely.
+  two_phase_apply: false
+
   # Path to the audit log file. All operations are logged here.
   log_file: "~/.adloop/audit.log"
 

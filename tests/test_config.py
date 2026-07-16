@@ -16,13 +16,19 @@ class TestLoadConfig:
             "safety:\n"
             "  max_daily_budget: 25.0\n"
             "  require_dry_run: false\n"
+            "  two_phase_apply: true\n"
             "ads:\n"
             "  customer_id: '123-456-7890'\n"
         )
         config = load_config(str(config_file))
         assert config.safety.max_daily_budget == 25.0
         assert config.safety.require_dry_run is False
+        assert config.safety.two_phase_apply is True
         assert config.ads.customer_id == "123-456-7890"
+
+    def test_two_phase_apply_defaults_off(self, tmp_path):
+        config = load_config(str(tmp_path / "nonexistent.yaml"))
+        assert config.safety.two_phase_apply is False
 
     def test_missing_sections_use_defaults(self, tmp_path):
         config_file = tmp_path / "config.yaml"

@@ -46,6 +46,7 @@ That file is the complete guide for combining AdLoop's 67 tools. It covers:
 
 - Two-step writes: draft -> preview -> confirm_and_apply
 - dry_run=true by default; require_dry_run in config overrides
+- two_phase_apply in config: real applies refused (DRY_RUN_REQUIRED) until the plan had one dry-run pass; always on for cloud tenants
 - Budget caps enforced; new campaigns/ads created as PAUSED
 - Broad Match + Manual CPC automatically blocked
 - All mutations logged to ~/.adloop/audit.log

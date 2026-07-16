@@ -232,6 +232,7 @@ AdLoop manages real ad spend, so safety is not optional.
 
 - **Two-step writes.** Every mutation returns a preview first. A separate `confirm_and_apply` call is required to execute.
 - **Dry-run by default.** Even `confirm_and_apply` defaults to `dry_run=true`. Real changes require explicit `dry_run=false`.
+- **Two-phase apply (optional).** With `safety.two_phase_apply: true`, `confirm_and_apply` refuses `dry_run=false` until the plan has completed one dry-run pass — preview-then-apply becomes server-enforced instead of a convention.
 - **Budget caps.** Configurable maximum daily budget — the server rejects anything above the cap.
 - **Audit log.** Every operation (including dry runs) is logged to `~/.adloop/audit.log`.
 - **New campaigns and ads are PAUSED.** Nothing goes live without manual enablement.
@@ -415,6 +416,7 @@ All configuration lives in `~/.adloop/config.yaml`. See [`config.yaml.example`](
 | `ads` | `login_customer_id` | — | Your MCC account ID |
 | `safety` | `max_daily_budget` | `50.00` | Maximum allowed daily budget per campaign |
 | `safety` | `require_dry_run` | `true` | Force all writes to dry-run mode |
+| `safety` | `two_phase_apply` | `false` | Refuse real applies until the plan had a dry-run pass |
 | `safety` | `blocked_operations` | `[]` | Operations to block entirely |
 
 ## Project Structure

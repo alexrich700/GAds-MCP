@@ -1789,7 +1789,7 @@ def confirm_and_apply(
     to make real changes.
     """
     from adloop.safety.audit import log_mutation
-    from adloop.safety.preview import get_plan, remove_plan
+    from adloop.safety.preview import get_plan, remove_plan, store_plan
 
     plan = get_plan(plan_id)
     if plan is None:
@@ -1813,6 +1813,17 @@ def confirm_and_apply(
             dry_run=True,
             result="dry_run_success",
         )
+        if plan.dry_run_result is None:
+            # Persist the dry-run pass on the plan; two-phase apply checks
+            # this marker before allowing a real write. Re-storing
+            # overwrites the pending plan (PlanStore.store is an upsert).
+            from datetime import datetime, timezone
+
+            plan.dry_run_result = {
+                "status": "DRY_RUN_SUCCESS",
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            store_plan(plan)
         response = {
             "status": "DRY_RUN_SUCCESS",
             "plan_id": plan.plan_id,
@@ -1847,6 +1858,33 @@ def confirm_and_apply(
                 "To apply for real, call confirm_and_apply again with dry_run=false."
             )
         return response
+
+    if config.safety.two_phase_apply and plan.dry_run_result is None:
+        # Server-enforced two-phase apply: the preview→confirm flow is a
+        # protocol requirement here, not a convention the calling agent
+        # can skip. Refuse, log the refusal, and keep the plan pending.
+        log_mutation(
+            config.safety.log_file,
+            operation=plan.operation,
+            customer_id=plan.customer_id,
+            entity_type=plan.entity_type,
+            entity_id=plan.entity_id,
+            changes=plan.changes,
+            dry_run=False,
+            result="refused_two_phase",
+        )
+        return {
+            "status": "DRY_RUN_REQUIRED",
+            "plan_id": plan.plan_id,
+            "operation": plan.operation,
+            "message": (
+                f"No changes were made: two-phase apply is enabled and plan "
+                f"'{plan.plan_id}' has not completed a dry run yet. Call "
+                f"confirm_and_apply with dry_run=true once, show the result "
+                f"to the user and get their approval, then call again with "
+                f"dry_run=false — that second call will succeed."
+            ),
+        }
 
     try:
         result = _execute_plan(config, plan)

@@ -2033,6 +2033,11 @@ def confirm_and_apply(
     user edits the config file, sets 'require_dry_run: false', and restarts
     the AdLoop MCP server.
 
+    Two-phase apply: if 'safety.two_phase_apply: true' is set (always on
+    for AdLoop Cloud tenants), dry_run=false is REFUSED with status
+    DRY_RUN_REQUIRED until this plan_id has completed one dry_run=true
+    pass. Run the dry run, show it to the user, then apply for real.
+
     The plan_id comes from a prior draft_* or pause/enable tool call.
     """
     from adloop.ads.write import confirm_and_apply as _impl

@@ -1918,6 +1918,113 @@ class TestConfirmAndApplyDryRunOverride:
         assert "dry_run_success" in contents
 
 
+class TestTwoPhaseApply:
+    """safety.two_phase_apply enforces the order: one dry-run pass per
+    plan before dry_run=false is accepted. This makes the preview→confirm
+    flow a protocol requirement the calling agent cannot skip (the hosted
+    runtime turns it on for all tenants)."""
+
+    def _stage_plan(self) -> str:
+        plan = preview_store.ChangePlan(
+            operation="add_keywords",
+            entity_type="keyword",
+            customer_id="123-456-7890",
+            changes={"ad_group_id": "2002", "keywords": []},
+        )
+        preview_store.store_plan(plan)
+        return plan.plan_id
+
+    def _config(self, tmp_path, *, two_phase: bool = True) -> AdLoopConfig:
+        return AdLoopConfig(
+            ads=AdsConfig(customer_id="123-456-7890"),
+            safety=SafetyConfig(
+                require_dry_run=False,
+                two_phase_apply=two_phase,
+                log_file=str(tmp_path / "audit.log"),
+            ),
+            source_path=str(tmp_path / "config.yaml"),
+        )
+
+    def test_apply_without_dry_run_pass_is_refused(self, tmp_path):
+        config = self._config(tmp_path)
+        plan_id = self._stage_plan()
+
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "DRY_RUN_REQUIRED"
+        assert result["plan_id"] == plan_id
+        assert "dry_run=true" in result["message"]
+        assert "dry_run=false" in result["message"]
+        # The plan must survive the refusal so the retry flow works.
+        assert preview_store.get_plan(plan_id) is not None
+
+    def test_dry_run_pass_is_persisted_on_the_plan(self, tmp_path):
+        config = self._config(tmp_path)
+        plan_id = self._stage_plan()
+
+        write.confirm_and_apply(config, plan_id=plan_id, dry_run=True)
+
+        stored = preview_store.get_plan(plan_id)
+        assert stored is not None
+        assert stored.dry_run_result is not None
+        assert stored.dry_run_result["status"] == "DRY_RUN_SUCCESS"
+        assert stored.dry_run_result["at"]
+
+    def test_apply_succeeds_after_dry_run_pass(self, tmp_path, monkeypatch):
+        config = self._config(tmp_path)
+        plan_id = self._stage_plan()
+        monkeypatch.setattr(
+            write, "_execute_plan", lambda *_: {"resource_name": "ok"}
+        )
+
+        write.confirm_and_apply(config, plan_id=plan_id, dry_run=True)
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "APPLIED"
+        assert preview_store.get_plan(plan_id) is None
+
+    def test_flag_off_keeps_direct_apply_working(self, tmp_path, monkeypatch):
+        """Backward compatibility: without the flag, dry_run=false straight
+        after the draft keeps working as before."""
+        config = self._config(tmp_path, two_phase=False)
+        plan_id = self._stage_plan()
+        monkeypatch.setattr(
+            write, "_execute_plan", lambda *_: {"resource_name": "ok"}
+        )
+
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "APPLIED"
+
+    def test_refusal_is_audit_logged(self, tmp_path):
+        config = self._config(tmp_path)
+        plan_id = self._stage_plan()
+
+        write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        contents = (tmp_path / "audit.log").read_text()
+        assert "refused_two_phase" in contents
+
+    def test_require_dry_run_override_wins_over_two_phase(self, tmp_path):
+        """With require_dry_run on, the forced-dry-run contract (incl. its
+        remediation fields) must be returned — not DRY_RUN_REQUIRED."""
+        config = AdLoopConfig(
+            ads=AdsConfig(customer_id="123-456-7890"),
+            safety=SafetyConfig(
+                require_dry_run=True,
+                two_phase_apply=True,
+                log_file=str(tmp_path / "audit.log"),
+            ),
+            source_path=str(tmp_path / "config.yaml"),
+        )
+        plan_id = self._stage_plan()
+
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "DRY_RUN_SUCCESS"
+        assert result["dry_run_forced_by"] == "config.safety.require_dry_run"
+
+
 # ---------------------------------------------------------------------------
 # RSA pinning — _normalize_rsa_assets + _validate_rsa
 # ---------------------------------------------------------------------------
