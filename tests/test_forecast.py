@@ -32,7 +32,7 @@ def _rest_idea(
 ) -> dict:
     """Build a REST-shape keyword idea entry.
 
-    Mirrors the v23 generateKeywordIdeas JSON response — int64 fields come
+    Mirrors the generateKeywordIdeas JSON response — int64 fields come
     back as strings, ``competition`` is the enum name (not a numeric code).
     """
     metrics: dict = {"competition": competition}
@@ -76,7 +76,7 @@ def _patch_rest(payload, monkeypatch):
 
 
 class TestDiscoverKeywords:
-    """REST-path tests for issue #37 — `discover_keywords` calls the v23 REST
+    """REST-path tests for issue #37 — `discover_keywords` calls the versioned REST
     `generateKeywordIdeas` endpoint directly, bypassing the gRPC quota bucket
     that exhausts after a small number of sequential calls.
     """
@@ -541,11 +541,10 @@ class TestEstimateBudgetZeroPreservation:
         # python's job — we just need attribute writes not to explode.
         def _get_type(_name):
             return SimpleNamespace(
-                geo_modifiers=[],
+                geo_target_constants=[],
                 language_constants=[],
                 ad_groups=[],
-                biddable_keywords=[],
-                keyword=SimpleNamespace(),
+                keywords=[],
                 bidding_strategy=SimpleNamespace(
                     manual_cpc_bidding_strategy=SimpleNamespace()
                 ),
@@ -553,7 +552,6 @@ class TestEstimateBudgetZeroPreservation:
             )
 
         enums = SimpleNamespace(
-            KeywordPlanNetworkEnum=SimpleNamespace(GOOGLE_SEARCH="GOOGLE_SEARCH"),
             KeywordMatchTypeEnum=SimpleNamespace(
                 EXACT="EXACT", PHRASE="PHRASE", BROAD="BROAD"
             ),
@@ -594,35 +592,35 @@ class TestEstimateBudgetZeroPreservation:
         )
 
     def test_zero_clicks_preserved_not_nulled(self, config, monkeypatch):
-        # The diagnostic insight "impressions but zero clicks" depends on
-        # clicks being a literal 0, not None. If this regresses, the
-        # insight silently stops firing.
+        # The diagnostic zero-clicks insight depends on clicks being a
+        # literal 0, not None. If this regresses, the insight silently
+        # stops firing.
         metrics = SimpleNamespace(
             clicks=0,
-            impressions=1000,
             average_cpc_micros=None,
             cost_micros=0,
-            click_through_rate=0.0,
+            conversions=None,
+            average_cpa_micros=None,
         )
         result = self._run(config, monkeypatch, metrics)
         assert result["estimated_clicks"] == 0
-        assert result["estimated_impressions"] == 1000
         assert result["estimated_cost"] == 0.0
-        assert result["estimated_ctr"] == 0.0
-        # The "zero clicks despite impressions" insight should fire.
+        # The "zero clicks" insight should fire.
         assert any("zero clicks" in i for i in result["insights"])
 
     def test_zero_cost_preserved_not_nulled(self, config, monkeypatch):
         metrics = SimpleNamespace(
             clicks=10,
-            impressions=100,
             average_cpc_micros=0,
             cost_micros=0,
-            click_through_rate=0.1,
+            conversions=0.0,
+            average_cpa_micros=None,
         )
         result = self._run(config, monkeypatch, metrics)
         assert result["estimated_cost"] == 0.0
         assert result["estimated_avg_cpc"] == 0.0
+        # A real 0.0-conversion forecast must survive as 0.0, not None.
+        assert result["estimated_conversions"] == 0.0
         # ``daily_estimates.cost`` must round-trip 0.0, not None.
         assert result["daily_estimates"]["cost"] == 0.0
 
@@ -631,38 +629,39 @@ class TestEstimateBudgetZeroPreservation:
         # fields. We must NOT coerce those to 0 (the opposite bug class).
         metrics = SimpleNamespace(
             clicks=None,
-            impressions=None,
             average_cpc_micros=None,
             cost_micros=None,
-            click_through_rate=None,
+            conversions=None,
+            average_cpa_micros=None,
         )
         result = self._run(config, monkeypatch, metrics)
         assert result["estimated_clicks"] is None
-        assert result["estimated_impressions"] is None
         assert result["estimated_cost"] is None
         assert result["estimated_avg_cpc"] is None
-        assert result["estimated_ctr"] is None
+        assert result["estimated_conversions"] is None
+        assert result["estimated_avg_cpa"] is None
         assert result["daily_estimates"]["clicks"] is None
-        assert result["daily_estimates"]["impressions"] is None
         assert result["daily_estimates"]["cost"] is None
 
     def test_realistic_forecast_still_works(self, config, monkeypatch):
         # Sanity check that the fix didn't break the normal happy path —
         # non-zero numbers still flow through and the headline insight
-        # still fires.
+        # still fires, plus the v24 conversions insight.
         metrics = SimpleNamespace(
             clicks=300,
-            impressions=10_000,
-            average_cpc_micros=500_000,  # 0.50
-            cost_micros=150_000_000,     # 150.00
-            click_through_rate=0.03,
+            average_cpc_micros=500_000,   # 0.50
+            cost_micros=150_000_000,      # 150.00
+            conversions=12.5,
+            average_cpa_micros=12_000_000,  # 12.00
         )
         result = self._run(config, monkeypatch, metrics)
         assert result["estimated_clicks"] == 300
         assert result["estimated_cost"] == 150.0
         assert result["estimated_avg_cpc"] == 0.5
-        assert result["estimated_ctr"] == 0.03
+        assert result["estimated_conversions"] == 12.5
+        assert result["estimated_avg_cpa"] == 12.0
         assert any("Estimated 300 clicks" in i for i in result["insights"])
+        assert any("12.5 conversions" in i for i in result["insights"])
 
 
 class TestRestRateLimitRetry:

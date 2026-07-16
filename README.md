@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-8A2BE2.svg)](https://modelcontextprotocol.io)
-[![Google Ads API](https://img.shields.io/badge/Google%20Ads-API%20v23-4285F4.svg?logo=google-ads&logoColor=white)](https://developers.google.com/google-ads/api/docs/start)
+[![Google Ads API](https://img.shields.io/badge/Google%20Ads-API%20v24-4285F4.svg?logo=google-ads&logoColor=white)](https://developers.google.com/google-ads/api/docs/start)
 [![GA4 Data API](https://img.shields.io/badge/GA4-Data%20API-E37400.svg?logo=google-analytics&logoColor=white)](https://developers.google.com/analytics/devguides/reporting/data/v1)
 [![GitHub stars](https://img.shields.io/github/stars/kLOsk/adloop?style=social)](https://github.com/kLOsk/adloop)
 
@@ -172,7 +172,7 @@ These tools read the live GTM container and join it with the codebase + GA4 to f
 | Tool | What It Does |
 |------|-------------|
 | `discover_keywords` | Discover new keyword ideas from seed keywords and/or a URL — with optional per-month search history + seasonality insights (`include_monthly_volumes`) using Google Ads Keyword Planner. Returns avg monthly searches, competition level, and top-of-page bid range. |
-| `estimate_budget` | Forecast clicks, impressions, and cost for a set of keywords using Google Ads Keyword Planner. Supports geo/language targeting. Essential for budget planning before launching campaigns. |
+| `estimate_budget` | Forecast clicks, cost, and conversions for a set of keywords using Google Ads Keyword Planner. Supports geo/language targeting. Essential for budget planning before launching campaigns. |
 
 ### Google Ads Write Tools
 

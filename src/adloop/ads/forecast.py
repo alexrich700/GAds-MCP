@@ -22,13 +22,16 @@ def estimate_budget(
     forecast_days: int = 30,
     customer_id: str = "",
 ) -> dict:
-    """Forecast clicks, impressions, and cost for a set of keywords.
+    """Forecast clicks, cost, and conversions for a set of keywords.
 
     Uses KeywordPlanIdeaService.GenerateKeywordForecastMetrics to estimate
     campaign performance without creating anything. Useful for budget planning
     before launching a new campaign.
 
     keywords: list of {"text": str, "match_type": "EXACT|PHRASE|BROAD", "max_cpc": float (optional)}
+        Since Ads API v24 the forecast takes no per-keyword bids — the
+        highest max_cpc across the list becomes the campaign-level manual
+        CPC cap.
     geo_target_id: geo target constant (2276=Germany, 2840=USA, 2826=UK, 2250=France)
     language_id: language constant (1000=English, 1001=German, 1002=French, 1003=Spanish)
     forecast_days: number of days to forecast (default 30)
@@ -45,9 +48,6 @@ def estimate_budget(
     kp_service = client.get_service("KeywordPlanIdeaService")
 
     campaign = client.get_type("CampaignToForecast")
-    campaign.keyword_plan_network = (
-        client.enums.KeywordPlanNetworkEnum.GOOGLE_SEARCH
-    )
 
     max_bid = max(
         (int(kw.get("max_cpc", 0) * 1_000_000) for kw in keywords),
@@ -57,11 +57,9 @@ def estimate_budget(
         max_bid = _DEFAULT_MAX_CPC_MICROS
     campaign.bidding_strategy.manual_cpc_bidding_strategy.max_cpc_bid_micros = max_bid
 
-    geo_modifier = client.get_type("CriterionBidModifier")
-    geo_modifier.geo_target_constant = googleads_service.geo_target_constant_path(
-        geo_target_id
+    campaign.geo_target_constants.append(
+        googleads_service.geo_target_constant_path(geo_target_id)
     )
-    campaign.geo_modifiers.append(geo_modifier)
 
     campaign.language_constants.append(
         googleads_service.language_constant_path(language_id)
@@ -74,15 +72,13 @@ def estimate_budget(
         if not text:
             continue
         match_type = kw.get("match_type", "BROAD").upper()
-        cpc_micros = int(kw.get("max_cpc", 0) * 1_000_000) or _DEFAULT_MAX_CPC_MICROS
 
-        biddable = client.get_type("BiddableKeyword")
-        biddable.max_cpc_bid_micros = cpc_micros
-        biddable.keyword.text = text
-        biddable.keyword.match_type = getattr(
+        keyword = client.get_type("KeywordInfo")
+        keyword.text = text
+        keyword.match_type = getattr(
             client.enums.KeywordMatchTypeEnum, match_type, client.enums.KeywordMatchTypeEnum.BROAD
         )
-        ad_group.biddable_keywords.append(biddable)
+        ad_group.keywords.append(keyword)
 
     campaign.ad_groups.append(ad_group)
 
@@ -98,29 +94,29 @@ def estimate_budget(
     response = kp_service.generate_keyword_forecast_metrics(request=request)
     metrics = response.campaign_forecast_metrics
 
-    # KeywordForecastMetrics fields are ``optional`` in v23, so the SDK
-    # returns ``None`` for unset fields and the actual integer (including
-    # 0) otherwise. Falsy checks like ``int(v) if v else None`` would
+    # KeywordForecastMetrics fields are ``optional``, so the SDK returns
+    # ``None`` for unset fields and the actual number (including 0)
+    # otherwise. Falsy checks like ``int(v) if v else None`` would
     # silently map a real 0-click or 0-cost forecast to None and the
     # caller couldn't tell "no data" apart from "data says zero" — same
     # bug class as discover_keywords (issue Bug 2). Use ``is not None``
     # throughout and the shared ``_micros_to_currency`` helper for the
     # micros→currency conversions.
+    # v24 dropped impressions/click_through_rate from the forecast and
+    # added conversions/average_cpa_micros.
     clicks = getattr(metrics, "clicks", None)
-    impressions = getattr(metrics, "impressions", None)
     avg_cpc_micros = getattr(metrics, "average_cpc_micros", None)
     cost_micros = getattr(metrics, "cost_micros", None)
-    ctr = getattr(metrics, "click_through_rate", None)
+    conversions = getattr(metrics, "conversions", None)
+    avg_cpa_micros = getattr(metrics, "average_cpa_micros", None)
 
     total_cost = _micros_to_currency(cost_micros)
     avg_cpc = _micros_to_currency(avg_cpc_micros)
+    avg_cpa = _micros_to_currency(avg_cpa_micros)
 
     days = max(forecast_days, 1)
     daily = {
         "clicks": round(clicks / days, 1) if clicks is not None else None,
-        "impressions": (
-            round(impressions / days, 1) if impressions is not None else None
-        ),
         "cost": round(total_cost / days, 2) if total_cost is not None else None,
     }
 
@@ -147,15 +143,16 @@ def estimate_budget(
                 f"most available traffic (estimated daily cost: {daily['cost']:.2f})."
             )
 
-    if (
-        impressions is not None
-        and clicks is not None
-        and impressions > 0
-        and clicks == 0
-    ):
+    if clicks is not None and clicks == 0:
         insights.append(
-            "Forecast shows impressions but zero clicks — keywords may be too "
-            "generic or CPCs too low for competitive positions."
+            "Forecast shows zero clicks — keywords may be too niche, too "
+            "generic, or the max CPC too low for competitive positions."
+        )
+
+    if conversions is not None and conversions > 0 and avg_cpa is not None:
+        insights.append(
+            f"Estimated {conversions:.1f} conversions at ~{avg_cpa:.2f} avg "
+            f"CPA (based on historical conversion rates for these keywords)."
         )
 
     return {
@@ -164,10 +161,12 @@ def estimate_budget(
             "end": end_date.isoformat(),
         },
         "estimated_clicks": clicks,
-        "estimated_impressions": impressions,
         "estimated_cost": total_cost,
         "estimated_avg_cpc": avg_cpc,
-        "estimated_ctr": round(ctr, 4) if ctr is not None else None,
+        "estimated_conversions": (
+            round(conversions, 1) if conversions is not None else None
+        ),
+        "estimated_avg_cpa": avg_cpa,
         "daily_estimates": daily,
         "keywords_used": len([kw for kw in keywords if kw.get("text")]),
         "insights": insights,
@@ -227,7 +226,7 @@ def _build_keyword_ideas_rest_body(
 ) -> dict:
     """Build the JSON body for the REST generateKeywordIdeas endpoint.
 
-    Schema follows google-ads REST v23 (camelCase). Exactly one of
+    Schema follows google-ads REST v24 (camelCase). Exactly one of
     ``keywordSeed`` / ``urlSeed`` / ``keywordAndUrlSeed`` is set based on
     which inputs were provided.
     """
@@ -255,7 +254,7 @@ def _post_keyword_ideas_rest_page(
 
     Issue #37: ``KeywordPlanIdeaService.GenerateKeywordIdeas`` over gRPC sits
     in a tight quota bucket that exhausts after a small number of sequential
-    calls and returns ``RESOURCE_EXHAUSTED`` regardless of QPS. The REST v23
+    calls and returns ``RESOURCE_EXHAUSTED`` regardless of QPS. The REST
     endpoint for the same method lives in a separate, much larger quota
     bucket, so this swap eliminates the 429s that made ``discover_keywords``
     unusable for any multi-geo or repeat-call workflow. Filed against
@@ -389,7 +388,7 @@ def discover_keywords(
         seasonality insight — the "Google Trends" view for keyword demand.
 
     Network: this tool intentionally bypasses the google-ads gRPC client for
-    KeywordPlanIdeaService and calls the v23 REST endpoint directly. The
+    KeywordPlanIdeaService and calls the versioned REST endpoint directly. The
     gRPC quota bucket for this single method exhausts almost immediately
     under sequential single-geo calls (issue #37); REST sits in a separate,
     much larger bucket and works without issue. All other Ads tools still

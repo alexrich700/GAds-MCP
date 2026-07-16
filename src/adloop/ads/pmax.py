@@ -121,7 +121,7 @@ def get_asset_performance(
     content. ``primary_status`` shows whether the asset is eligible to serve
     (ELIGIBLE, NOT_ELIGIBLE, PAUSED, PENDING).
 
-    Note: the Google Ads API v23 does not expose per-asset performance labels
+    Note: the Google Ads API does not expose per-asset performance labels
     (BEST/GOOD/LOW) for PMax assets via GAQL. Use ``get_detailed_asset_performance``
     to see which asset *combinations* Google selects most — that's the closest
     proxy for individual asset quality.

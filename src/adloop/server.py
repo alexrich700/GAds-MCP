@@ -851,7 +851,7 @@ def get_asset_performance(
     PENDING), and content (text or image URL).
 
     Note: per-asset performance labels (BEST/GOOD/LOW) are not available for
-    PMax assets in Google Ads API v23. Use get_detailed_asset_performance to
+    PMax assets in the Google Ads API. Use get_detailed_asset_performance to
     see which asset combinations Google selects most — the closest proxy for
     individual asset quality.
 
@@ -2148,10 +2148,12 @@ def estimate_budget(
     forecast_days: int = 30,
     customer_id: str = "",
 ) -> dict:
-    """Forecast clicks, impressions, and cost for a set of keywords.
+    """Forecast clicks, cost, and conversions for a set of keywords.
 
     Uses Google Ads Keyword Planner to estimate campaign performance without
     creating anything. Essential for budget planning before launching campaigns.
+    Per-keyword max_cpc values are collapsed to a campaign-level manual CPC
+    cap (the highest one) — the Ads API forecast takes no per-keyword bids.
 
     keywords: list of {"text": "keyword", "match_type": "EXACT|PHRASE|BROAD", "max_cpc": 1.50}
         max_cpc is optional (defaults to 1.00 in account currency)
