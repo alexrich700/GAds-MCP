@@ -177,7 +177,19 @@ def list_accounts(config: AdLoopConfig) -> dict:
             "name": acct.get("name"),
             "path": acct.get("path"),
         })
-    return {"accounts": accounts, "count": len(accounts)}
+    result = {"accounts": accounts, "count": len(accounts)}
+    if not accounts:
+        # Guard against the "empty list = all healthy" misreading: a
+        # model asked to audit tags once reported "Tag Manager is ok"
+        # for an account that has no GTM at all.
+        result["insights"] = [
+            "This Google account has NO Tag Manager accounts. Do not "
+            "report Tag Manager as healthy or audited — report that GTM "
+            "is not in use. Sites can track perfectly well without GTM "
+            "(gtag.js installed directly); use GA4 tools like "
+            "validate_tracking to assess tracking health instead."
+        ]
+    return result
 
 
 def list_containers(config: AdLoopConfig, *, account_id: str) -> dict:

@@ -16,7 +16,7 @@ def list_gsc_sites(config: AdLoopConfig) -> dict:
     result = client.sites().list().execute()
 
     sites = result.get("siteEntry", [])
-    return {
+    payload = {
         "sites": [
             {
                 "site_url": s["siteUrl"],
@@ -26,6 +26,15 @@ def list_gsc_sites(config: AdLoopConfig) -> dict:
         ],
         "total": len(sites),
     }
+    if not sites:
+        # Same guard as list_gtm_accounts: an empty list must not be
+        # misread as "audited and healthy".
+        payload["insights"] = [
+            "This Google account has NO Search Console properties. Do "
+            "not report Search Console data as checked — report that "
+            "GSC is not set up for this account."
+        ]
+    return payload
 
 
 def run_gsc_report(

@@ -21,6 +21,47 @@ from adloop.gtm.read import (
 
 
 # ---------------------------------------------------------------------------
+# list_accounts — empty result must carry an anti-misreading insight
+# ---------------------------------------------------------------------------
+
+
+class TestListAccountsEmpty:
+    def test_empty_account_list_warns_against_healthy_misreading(self):
+        """Regression: a model asked to audit tags reported 'Tag Manager
+        is ok' for a Google account that has no GTM at all — an empty
+        list must say so explicitly instead of reading like a clean
+        audit."""
+        from unittest.mock import MagicMock
+
+        from adloop.config import AdLoopConfig
+        from adloop.gtm.read import list_accounts
+
+        client = MagicMock()
+        client.accounts.return_value.list.return_value.execute.return_value = {}
+        with patch("adloop.gtm.client.get_gtm_client", return_value=client):
+            result = list_accounts(AdLoopConfig())
+
+        assert result["count"] == 0
+        assert any("NO Tag Manager" in i for i in result["insights"])
+
+    def test_populated_account_list_has_no_insights(self):
+        from unittest.mock import MagicMock
+
+        from adloop.config import AdLoopConfig
+        from adloop.gtm.read import list_accounts
+
+        client = MagicMock()
+        client.accounts.return_value.list.return_value.execute.return_value = {
+            "account": [{"accountId": "600", "name": "Main", "path": "accounts/600"}]
+        }
+        with patch("adloop.gtm.client.get_gtm_client", return_value=client):
+            result = list_accounts(AdLoopConfig())
+
+        assert result["count"] == 1
+        assert "insights" not in result
+
+
+# ---------------------------------------------------------------------------
 # _params_dict — flatten parameter[] arrays into a {key: value} dict
 # ---------------------------------------------------------------------------
 

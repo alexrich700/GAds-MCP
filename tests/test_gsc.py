@@ -38,6 +38,18 @@ class TestListSites:
         assert result["total"] == 2
         assert result["sites"][0]["permission_level"] == "siteOwner"
         assert result["sites"][1]["permission_level"] == "unknown"
+        assert "insights" not in result
+
+    def test_empty_site_list_warns_against_healthy_misreading(self, config):
+        """An empty list must not be spun into 'checked and fine' by the
+        calling model — regression for the 'all Tag Manager is ok' report
+        on an account without GTM/GSC at all."""
+        client = _fake_client(sites_response={})
+        with patch("adloop.gsc.client.get_gsc_client", return_value=client):
+            result = reports.list_gsc_sites(config)
+
+        assert result["total"] == 0
+        assert any("NO Search Console" in i for i in result["insights"])
 
 
 class TestRunReport:
