@@ -257,9 +257,16 @@ def _oauth_flow(
 
     creds = None
     if token_path.exists():
-        creds = OAuthCredentials.from_authorized_user_file(
-            str(token_path), _ALL_SCOPES
-        )
+        stored_scopes = _stored_token_scopes(token_path)
+        if stored_scopes is None or set(_ALL_SCOPES) - set(stored_scopes):
+            # Token predates newer scopes (or is unreadable). Google
+            # rejects scope expansion at refresh with invalid_scope, so
+            # discard it and fall through to a fresh consent flow.
+            token_path.unlink(missing_ok=True)
+        else:
+            creds = OAuthCredentials.from_authorized_user_file(
+                str(token_path), _ALL_SCOPES
+            )
 
     if creds and creds.valid:
         return creds
@@ -279,18 +286,61 @@ def _oauth_flow(
                     "(2) publish the consent screen to 'In production' in Google "
                     "Cloud Console to prevent future expiry."
                 ) from exc
+            if "invalid_scope" in err_str:
+                token_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    "OAuth token was granted with an older set of scopes and "
+                    "Google refused to refresh it (invalid_scope). AdLoop has "
+                    "added new Google API scopes since this token was created. "
+                    "Fix: re-run any AdLoop tool to trigger re-authorization "
+                    "and approve the updated consent screen."
+                ) from exc
             raise
     else:
         flow = InstalledAppFlow.from_client_secrets_file(
             str(creds_path), _ALL_SCOPES
         )
         creds = _run_oauth_with_fallback(flow)
+        _verify_granted_scopes(creds)
 
     token_path.parent.mkdir(parents=True, exist_ok=True)
     with open(token_path, "w") as f:
         f.write(creds.to_json())
 
     return creds
+
+
+def _verify_granted_scopes(creds: Credentials) -> None:
+    """Reject a consent that granted fewer scopes than AdLoop requested.
+
+    Google's consent screen lets users uncheck individual scopes. Local
+    mode stores one token for all services, so a partial grant would be
+    discarded as stale on the next load and consent would reopen every
+    call — fail loudly once instead of looping.
+    """
+    granted = set(getattr(creds, "scopes", None) or [])
+    missing = set(_ALL_SCOPES) - granted
+    if missing:
+        raise RuntimeError(
+            "Google authorization completed, but these scopes were not "
+            f"granted: {', '.join(sorted(missing))}. AdLoop's local mode "
+            "needs every requested scope in a single grant — re-run any "
+            "AdLoop tool and leave all permissions checked on the consent "
+            "screen. Need per-scope control? AdLoop Cloud supports "
+            "selective scope grants: https://getadloop.com"
+        )
+
+
+def _stored_token_scopes(token_path: Path) -> list[str] | None:
+    """Scopes recorded in the stored token file, or None if unreadable."""
+    import json
+
+    try:
+        stored = json.loads(token_path.read_text())
+    except (OSError, ValueError):
+        return None
+    scopes = stored.get("scopes")
+    return scopes if isinstance(scopes, list) else None
 
 
 def _is_interactive_terminal() -> bool:
