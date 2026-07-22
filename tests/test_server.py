@@ -312,3 +312,61 @@ class TestNoStaleModuleConfig:
         finally:
             runtime.set_default_config(None)
             preview_store.set_plan_store(InMemoryPlanStore())
+
+
+class TestToolsets:
+    """ADLOOP_TOOLSETS taxonomy + filtering (shared contract with AdLoop Cloud)."""
+
+    def test_toolset_slugs_match_the_cross_repo_contract(self):
+        from adloop.server import TOOLSETS
+
+        assert list(TOOLSETS) == [
+            "ads", "ga4", "tracking", "gtm", "gsc", "web", "merchant",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_every_tool_carries_exactly_one_toolset_tag(self):
+        """New tools MUST be tagged — untagged tools would silently vanish
+        for every ADLOOP_TOOLSETS user and every restricted cloud key."""
+        from adloop.server import TOOLSETS, mcp
+
+        known = set(TOOLSETS) | {"core"}
+        for tool in await mcp.list_tools():
+            hits = (tool.tags or set()) & known
+            assert len(hits) == 1, f"{tool.name}: toolset tags {hits or 'MISSING'}"
+
+    @pytest.mark.asyncio
+    async def test_selection_exposes_chosen_sets_plus_core(self, monkeypatch):
+        from adloop import server
+
+        monkeypatch.setenv("ADLOOP_TOOLSETS", "ga4")
+        saved = list(server.mcp._transforms)
+        server._apply_toolsets_env()
+        try:
+            names = {t.name for t in await server.mcp.list_tools()}
+            assert "run_ga4_report" in names
+            assert "draft_key_event" in names
+            # Core survives every selection.
+            assert "health_check" in names
+            assert "confirm_and_apply" in names
+            # Everything else is gone.
+            assert "get_campaign_performance" not in names
+            assert "list_gtm_accounts" not in names
+        finally:
+            server.mcp._transforms[:] = saved
+
+    def test_unknown_slug_fails_loudly_with_the_valid_list(self, monkeypatch):
+        from adloop import server
+
+        monkeypatch.setenv("ADLOOP_TOOLSETS", "ads,anlytics")
+        with pytest.raises(ValueError, match="anlytics") as exc:
+            server._apply_toolsets_env()
+        assert "ads, ga4, tracking" in str(exc.value)
+
+    def test_unset_env_leaves_the_full_catalog(self, monkeypatch):
+        from adloop import server
+
+        monkeypatch.delenv("ADLOOP_TOOLSETS", raising=False)
+        before = list(server.mcp._transforms)
+        server._apply_toolsets_env()
+        assert server.mcp._transforms == before

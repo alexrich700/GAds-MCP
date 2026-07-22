@@ -19,13 +19,13 @@ An MCP server that gives your AI assistant read + write access to Google Ads and
 </div>
 
 > [!TIP]
-> **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the same 67 tools from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
+> **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the full toolset from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
 
 ---
 
 ## Cloud or Self-Hosted?
 
-Both versions run the same 67 tools with the same safety model. The difference is who handles the plumbing:
+Both versions run the same tools with the same safety model. The difference is who handles the plumbing:
 
 |  | ☁️ [AdLoop Cloud](https://getadloop.com) | 🛠️ Self-hosted (this repo) |
 |---|---|---|
@@ -63,7 +63,7 @@ Every tool exists because of an actual problem hit while running real Google Ads
 
 The best features come from real workflows. If you're using AdLoop and find yourself wishing it could do something it can't, **open an issue describing your situation** — not just "add feature X" but "I was trying to do Y and couldn't because Z." The context matters more than the request.
 
-## All 67 Tools
+## All Tools
 
 > **Quick start:** `pip install adloop` or `git clone https://github.com/kLOsk/adloop.git && cd adloop && uv sync && uv run adloop init` — or zero setup on [AdLoop Cloud](https://getadloop.com)
 
@@ -418,6 +418,16 @@ All configuration lives in `~/.adloop/config.yaml`. See [`config.yaml.example`](
 | `safety` | `require_dry_run` | `true` | Force all writes to dry-run mode |
 | `safety` | `two_phase_apply` | `false` | Refuse real applies until the plan had a dry-run pass |
 | `safety` | `blocked_operations` | `[]` | Operations to block entirely |
+
+### Toolsets — trim the context footprint
+
+MCP clients that load every tool schema upfront pay a context cost for the full catalog (roughly 18k tokens). If you only need part of AdLoop, expose a subset with the `ADLOOP_TOOLSETS` environment variable (set it in your MCP client's `env` block):
+
+```json
+"env": { "ADLOOP_TOOLSETS": "ads,ga4" }
+```
+
+Valid toolsets: `ads` (reads, writes, planning), `ga4` (reports, realtime, key events), `tracking` (cross-channel attribution + tracking codegen), `gtm`, `gsc`, `web` (PageSpeed), `merchant`. `health_check` and `confirm_and_apply` are always available. Unset = the full catalog. Unknown names fail at startup with the valid list.
 
 ## Project Structure
 

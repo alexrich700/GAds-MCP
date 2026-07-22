@@ -613,7 +613,7 @@ def _maybe_offer_global_rules_install() -> None:
         _print(f"    • {c.display_name}")
     _print()
     _print("  AdLoop ships orchestration rules that teach Claude how to use")
-    _print("  these tools safely (43 tools, safety patterns, GAQL reference).")
+    _print("  these tools safely (tool inventory, safety patterns, GAQL reference).")
     _print("  Without them, you get raw tool access but no orchestration.")
     _print()
 

@@ -34,7 +34,7 @@ All tool usage rules, safety protocols, orchestration patterns, GAQL reference, 
 
 **Read and follow `.claude/rules/adloop.md` for all AdLoop MCP tool orchestration.**
 
-That file is the complete guide for combining AdLoop's 67 tools. It covers:
+That file is the complete guide for combining AdLoop's tools. It covers:
 - Tool inventory with parameters and when to use each
 - 9 safety rules (budget caps, dry-run defaults, Broad Match prevention, pre-write validation)
 - 16 orchestration patterns (performance review, PMax analysis, recommendations, ad creation, tracking diagnosis, etc.)
