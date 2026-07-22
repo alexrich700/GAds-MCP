@@ -107,3 +107,107 @@ class TestPromptToolsets:
         monkeypatch.setattr("builtins.input", lambda *a: next(answers))
         # Deduped, lowercased, comma-joined — the exact env-var format.
         assert cli._prompt_toolsets() == "ads,ga4"
+
+
+class TestGenerateConfigYamlOptionalServices:
+    def test_optional_sections_parse_with_values(self):
+        content = _generate_config_yaml(
+            project_id="",
+            credentials_path="",
+            property_id="123",
+            developer_token="tok",
+            customer_id="111-222-3333",
+            login_customer_id="999-888-7777",
+            max_daily_budget=50.0,
+            require_dry_run=True,
+            gsc_site_url="sc-domain:example.com",
+            gtm_account_id="6001",
+            gtm_container_id="7001",
+            pagespeed_api_key="AIzaKey",
+        )
+        parsed = yaml.safe_load(content)
+        assert parsed["gsc"]["site_url"] == "sc-domain:example.com"
+        assert parsed["gtm"] == {"account_id": "6001", "container_id": "7001"}
+        assert parsed["pagespeed"]["api_key"] == "AIzaKey"
+
+    def test_optional_sections_default_to_empty_but_present(self):
+        content = _generate_config_yaml(
+            project_id="",
+            credentials_path="",
+            property_id="123",
+            developer_token="tok",
+            customer_id="111-222-3333",
+            login_customer_id="999-888-7777",
+            max_daily_budget=50.0,
+            require_dry_run=True,
+        )
+        parsed = yaml.safe_load(content)
+        # Sections always render (mirrors config.yaml.example) so users
+        # can fill them in later without guessing key names.
+        assert parsed["gsc"]["site_url"] == ""
+        assert parsed["gtm"]["container_id"] == ""
+        assert parsed["pagespeed"]["api_key"] == ""
+
+
+class TestWizardOptionalServiceSteps:
+    def test_gsc_step_declined_keeps_existing_value(self, monkeypatch):
+        from adloop import cli
+
+        answers = iter(["n"])
+        monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+        result = cli._wizard_gsc_step(
+            True, lambda section, key, fallback="": "sc-domain:kept.com"
+        )
+        assert result == "sc-domain:kept.com"
+
+    def test_gsc_step_discovers_and_picks_from_choices(self, monkeypatch):
+        from adloop import cli
+        from adloop.gsc import reports
+
+        monkeypatch.setattr(
+            reports,
+            "list_gsc_sites",
+            lambda cfg: {
+                "sites": [
+                    {"site_url": "https://a.com/", "permission_level": "siteOwner"},
+                    {"site_url": "sc-domain:b.com", "permission_level": "siteFullUser"},
+                ]
+            },
+        )
+        answers = iter(["y", "2"])  # configure? yes → pick the second site
+        monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+        result = cli._wizard_gsc_step(True, lambda *a, **k: "")
+        assert result == "sc-domain:b.com"
+
+    def test_gtm_step_auto_picks_single_account_and_web_container(self, monkeypatch):
+        from adloop import cli
+        from adloop.gtm import read as gtm_read
+
+        monkeypatch.setattr(
+            gtm_read,
+            "list_accounts",
+            lambda cfg: {"accounts": [{"account_id": "6001", "name": "Main"}]},
+        )
+        monkeypatch.setattr(
+            gtm_read,
+            "list_containers",
+            lambda cfg, *, account_id: {
+                "containers": [
+                    {
+                        "container_id": "7001",
+                        "public_id": "GTM-ABC1234",
+                        "name": "Web",
+                        "usage_context": ["web"],
+                    },
+                    {
+                        "container_id": "7002",
+                        "public_id": "GTM-XYZ9876",
+                        "name": "App",
+                        "usage_context": ["android"],
+                    },
+                ]
+            },
+        )
+        answers = iter(["y"])  # configure? yes → everything else auto-picked
+        monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+        assert cli._wizard_gtm_step(True, lambda *a, **k: "") == ("6001", "7001")

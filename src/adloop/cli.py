@@ -147,6 +147,10 @@ def _generate_config_yaml(
     login_customer_id: str,
     max_daily_budget: float,
     require_dry_run: bool,
+    gsc_site_url: str = "",
+    gtm_account_id: str = "",
+    gtm_container_id: str = "",
+    pagespeed_api_key: str = "",
 ) -> str:
     dry_run_str = "true" if require_dry_run else "false"
 
@@ -179,6 +183,21 @@ def _generate_config_yaml(
         f'  customer_id: "{customer_id}"',
         "  # MCC / Manager Account ID (required if using a manager account)",
         f'  login_customer_id: "{login_customer_id}"',
+        "",
+        "gsc:",
+        '  # "https://example.com/" (URL-prefix) or "sc-domain:example.com".',
+        "  # Empty = pass site_url as a parameter in each tool call instead.",
+        f'  site_url: "{gsc_site_url}"',
+        "",
+        "gtm:",
+        "  # Default GTM account/container for the GTM tools.",
+        "  # Empty = pass gtm_account_id / gtm_container_id per call instead.",
+        f'  account_id: "{gtm_account_id}"',
+        f'  container_id: "{gtm_container_id}"',
+        "",
+        "pagespeed:",
+        "  # Optional API key for analyze_page_speed (keyless works, low quota).",
+        f'  api_key: "{pagespeed_api_key}"',
         "",
         "safety:",
         "  # Maximum daily budget AdLoop can set (safety cap)",
@@ -255,6 +274,116 @@ def _prompt_toolsets() -> str:
             f"    ⚠  Unknown toolset(s): {', '.join(unknown) or '(none given)'}."
             f" Valid: {', '.join(TOOLSETS)}"
         )
+
+
+def _wizard_gtm_step(oauth_ok: bool, _existing) -> tuple[str, str]:
+    """Optionally pin a GTM account + container (discovery when possible)."""
+    if not _prompt_bool("Pin a Google Tag Manager container? (optional)", default=False):
+        return (_existing("gtm", "account_id"), _existing("gtm", "container_id"))
+
+    if oauth_ok:
+        try:
+            from adloop.config import load_config
+            from adloop.gtm.read import list_accounts, list_containers
+
+            cfg = load_config(str(_CONFIG_PATH))
+            accounts = list_accounts(cfg).get("accounts", [])
+            if not accounts:
+                _print("  No GTM accounts on this Google account — skipping.")
+                _print("  (Sites can track fine without GTM — gtag.js directly.)")
+                return ("", "")
+            if len(accounts) == 1:
+                account_id = str(accounts[0]["account_id"])
+                _print(f"  ✓ Found GTM account: {accounts[0]['name']}")
+            else:
+                account_id = _prompt_choice(
+                    "Select your GTM account:",
+                    [
+                        (str(a["account_id"]), f"{a['name']} ({a['account_id']})")
+                        for a in accounts
+                    ],
+                )
+            containers = list_containers(cfg, account_id=account_id).get(
+                "containers", []
+            )
+            web = [
+                c
+                for c in containers
+                if "web" in [str(u).lower() for u in (c.get("usage_context") or [])]
+            ] or containers
+            if not web:
+                _print("  No containers in that account — skipping container pin.")
+                return (account_id, "")
+            if len(web) == 1:
+                _print(f"  ✓ Found container: {web[0]['name']} ({web[0]['public_id']})")
+                return (account_id, str(web[0]["container_id"]))
+            container_id = _prompt_choice(
+                "Select your GTM container:",
+                [
+                    (str(c["container_id"]), f"{c['name']} ({c['public_id']})")
+                    for c in web
+                ],
+            )
+            return (account_id, container_id)
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            _print(f"  Could not discover GTM ({exc}) — enter manually or skip.")
+            _print("  (The Tag Manager API must be enabled in your GCP project.)")
+
+    account_id = _prompt(
+        "GTM Account ID (Enter to skip)",
+        default=_existing("gtm", "account_id"),
+        required=False,
+    )
+    container_id = ""
+    if account_id:
+        container_id = _prompt(
+            "GTM Container ID (numeric, Enter to skip)",
+            default=_existing("gtm", "container_id"),
+            required=False,
+        )
+    return (account_id, container_id)
+
+
+def _wizard_gsc_step(oauth_ok: bool, _existing) -> str:
+    """Optionally pin a Search Console property (discovery when possible)."""
+    if not _prompt_bool("Pin a Search Console property? (optional)", default=False):
+        return _existing("gsc", "site_url")
+
+    if oauth_ok:
+        try:
+            from adloop.config import load_config
+            from adloop.gsc.reports import list_gsc_sites
+
+            cfg = load_config(str(_CONFIG_PATH))
+            sites = list_gsc_sites(cfg).get("sites", [])
+            if not sites:
+                _print("  No Search Console properties on this account — skipping.")
+                return ""
+            if len(sites) == 1:
+                _print(f"  ✓ Found GSC property: {sites[0]['site_url']}")
+                if _prompt_bool("Use this property?", default=True):
+                    return sites[0]["site_url"]
+            else:
+                return _prompt_choice(
+                    "Select your Search Console property:",
+                    [
+                        (s["site_url"], f"{s['site_url']} ({s['permission_level']})")
+                        for s in sites
+                    ],
+                )
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            _print(f"  Could not discover GSC properties ({exc}).")
+            _print("  (The Search Console API must be enabled in your GCP project.)")
+
+    return _prompt(
+        'GSC site URL ("https://example.com/" or "sc-domain:example.com", Enter to skip)',
+        default=_existing("gsc", "site_url"),
+        required=False,
+    )
 
 
 def _step_header(num: int, title: str) -> None:
@@ -548,6 +677,19 @@ def _run_wizard_post_config(
             default=_existing("ads", "customer_id"),  # type: ignore[operator]
         )
 
+    # Optional service pins: GTM / Search Console / PageSpeed. All three
+    # work without config (explicit args or discovery per call) — a pin
+    # just saves the model a lookup and locks tools to the right property.
+    step_num += 1
+    _step_header(step_num, "Optional Services (GTM, Search Console, PageSpeed)")
+    gtm_account_id, gtm_container_id = _wizard_gtm_step(oauth_ok, _existing)
+    gsc_site_url = _wizard_gsc_step(oauth_ok, _existing)
+    pagespeed_api_key = _prompt(
+        "PageSpeed Insights API key (optional, Enter to skip)",
+        default=_existing("pagespeed", "api_key"),  # type: ignore[operator]
+        required=False,
+    )
+
     # Safety defaults
     step_num += 1
     _step_header(step_num, "Safety Defaults")
@@ -580,6 +722,10 @@ def _run_wizard_post_config(
         login_customer_id=login_customer_id,
         max_daily_budget=max_daily_budget,
         require_dry_run=require_dry_run,
+        gsc_site_url=gsc_site_url,
+        gtm_account_id=gtm_account_id,
+        gtm_container_id=gtm_container_id,
+        pagespeed_api_key=pagespeed_api_key,
     )
     _CONFIG_PATH.write_text(config_yaml)
     _print(f"  ✓ Config written to {_CONFIG_PATH}")

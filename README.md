@@ -281,8 +281,10 @@ The wizard walks you through:
 3. **MCC Account ID** — your Manager Account ID (top bar in the MCC UI)
 4. **OAuth sign-in** — opens a browser to sign in with Google (or prints a URL for headless servers)
 5. **Auto-discovers your accounts** — finds your GA4 properties and Ads accounts automatically
-6. **Safety defaults** — budget cap and dry-run preference
-7. **Editor config snippets** — prints MCP configuration for both Cursor and Claude Code
+6. **Optional services** — pin a GTM container, a Search Console property (both auto-discovered too), and a PageSpeed API key; skip any of them with Enter
+7. **Safety defaults** — budget cap and dry-run preference
+8. **Toolsets** — optionally expose only part of the tool catalog to your AI client (see [Toolsets](#toolsets--trim-the-context-footprint))
+9. **Editor config snippets** — prints MCP configuration for both Cursor and Claude Code, including your toolset selection
 
 ### Requirements
 
@@ -421,13 +423,25 @@ All configuration lives in `~/.adloop/config.yaml`. See [`config.yaml.example`](
 
 ### Toolsets — trim the context footprint
 
-MCP clients that load every tool schema upfront pay a context cost for the full catalog (roughly 18k tokens). If you only need part of AdLoop, expose a subset with the `ADLOOP_TOOLSETS` environment variable (set it in your MCP client's `env` block):
+Most MCP clients (claude.ai, ChatGPT, Cursor, …) load **every tool schema into the model's context at the start of every conversation**. AdLoop's full catalog costs roughly 18k tokens per session that way — paid before you type a word. If you only use part of AdLoop, expose a subset with the `ADLOOP_TOOLSETS` environment variable in your MCP client's `env` block (the `adloop init` wizard offers this and writes it into the snippets for you):
 
 ```json
 "env": { "ADLOOP_TOOLSETS": "ads,ga4" }
 ```
 
-Valid toolsets: `ads` (reads, writes, planning), `ga4` (reports, realtime, key events), `tracking` (cross-channel attribution + tracking codegen), `gtm`, `gsc`, `web` (PageSpeed), `merchant`. `health_check` and `confirm_and_apply` are always available. Unset = the full catalog. Unknown names fail at startup with the valid list.
+| Toolset | Covers |
+|---|---|
+| `ads` | Google Ads reads, writes, and planning (Keyword Planner) |
+| `ga4` | Google Analytics reports, realtime, key events |
+| `tracking` | Cross-channel attribution + tracking code generation |
+| `gtm` | Google Tag Manager audits and reads |
+| `gsc` | Search Console reads |
+| `web` | PageSpeed / Core Web Vitals |
+| `merchant` | Merchant Center feed health |
+
+`health_check` and `confirm_and_apply` are always included, whatever you select. Unset = the full catalog; unknown names fail at startup with the valid list. The effect is real: `ads,ga4` drops the session cost to ~13k tokens, and a `ga4`-only client pays ~2k — nearly 90% less. Toolsets are per *client*, not per install: one AdLoop config can serve a trimmed Cursor and a full-catalog Claude Code side by side.
+
+On [AdLoop Cloud](https://getadloop.com), the same feature is per API key: pick toolsets when creating a key in the dashboard, and that key's tools/list is trimmed server-side for whichever AI client uses it.
 
 ## Project Structure
 
