@@ -17,7 +17,7 @@ python scripts/sync-rules.py  # Sync rules: .cursor/rules/ -> .claude/rules/
 ```
 src/adloop/
 ├── __init__.py        # Entry point — routes 'adloop init' vs MCP server
-├── server.py          # FastMCP server — 67 tool registrations
+├── server.py          # FastMCP server — all tool registrations + toolset tags
 ├── config.py          # Config loader (~/.adloop/config.yaml)
 ├── auth.py            # OAuth 2.0 (user-supplied credentials, headless fallback) + service accounts
 ├── cli.py             # Interactive setup wizard (own Google Cloud project + auto-discovery)
@@ -41,6 +41,19 @@ That file is the complete guide for combining AdLoop's tools. It covers:
 - GAQL quick reference with syntax, common queries, and gotchas
 - GDPR consent awareness for EU markets
 - Ad copy character limits and marketing best practices
+
+## Documentation Site
+
+User docs live in the sibling repo `../adloop-docs` (Mintlify,
+docs.getadloop.com — push to main deploys). **After any tool or toolset
+change here, regenerate the docs tool reference and push it:**
+
+```bash
+cd ../adloop-docs && uv run --project ../adloop python scripts/generate_tools.py
+```
+
+`reference/tools.mdx` is generated from the live registry — never edit it
+by hand, and never state tool counts in prose anywhere (they rot).
 
 ## Safety Model (Summary)
 

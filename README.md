@@ -21,6 +21,8 @@ An MCP server that gives your AI assistant read + write access to Google Ads and
 > [!TIP]
 > **[AdLoop Cloud](https://getadloop.com) is the hosted version of this project — live now, free during beta (limited seats).** Connect Google in two clicks and use the full toolset from claude.ai, ChatGPT, Claude Code, Cursor, or Gemini. No Google Cloud project, no developer token, no OAuth verification wait. EU-hosted, GDPR-first, DPA included.
 
+> 📚 **Documentation: [docs.getadloop.com](https://docs.getadloop.com)** — setup guides per AI client, toolsets, the safety model, and troubleshooting for both editions.
+
 ---
 
 ## Cloud or Self-Hosted?
