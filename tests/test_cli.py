@@ -54,3 +54,56 @@ class TestGenerateConfigYaml:
         assert "credentials_path resolved from" in text
         parsed = yaml.safe_load(text)
         assert "credentials_path" not in parsed.get("google", {})
+
+class TestToolsetSnippets:
+    """MCP client snippets must carry ADLOOP_TOOLSETS when a subset is chosen."""
+
+    def test_json_snippets_without_toolsets_have_no_env(self):
+        import json
+
+        from adloop.cli import _generate_claude_json_snippet, _generate_cursor_snippet
+
+        for snippet in (_generate_cursor_snippet(), _generate_claude_json_snippet()):
+            parsed = json.loads(snippet)
+            assert "env" not in parsed["mcpServers"]["adloop"]
+
+    def test_json_snippets_with_toolsets_are_valid_and_carry_env(self):
+        import json
+
+        from adloop.cli import _generate_claude_json_snippet, _generate_cursor_snippet
+
+        for snippet in (
+            _generate_cursor_snippet("ads,ga4"),
+            _generate_claude_json_snippet("ads,ga4"),
+        ):
+            parsed = json.loads(snippet)
+            assert parsed["mcpServers"]["adloop"]["env"] == {
+                "ADLOOP_TOOLSETS": "ads,ga4"
+            }
+
+    def test_claude_code_command_injects_env_before_the_separator(self):
+        from adloop.cli import _generate_claude_code_snippet
+
+        plain = _generate_claude_code_snippet()
+        assert "ADLOOP_TOOLSETS" not in plain
+
+        cmd = _generate_claude_code_snippet("ads,ga4")
+        assert "--env ADLOOP_TOOLSETS=ads,ga4" in cmd
+        assert cmd.index("--env") < cmd.index(" -- ")
+
+
+class TestPromptToolsets:
+    def test_default_is_the_full_catalog(self, monkeypatch):
+        from adloop import cli
+
+        answers = iter([""])  # Enter on "Expose the full toolset?" [Y/n]
+        monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+        assert cli._prompt_toolsets() == ""
+
+    def test_invalid_slugs_reprompt_then_normalize(self, monkeypatch):
+        from adloop import cli
+
+        answers = iter(["n", "ads, bogus", "ADS, ga4, ads"])
+        monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+        # Deduped, lowercased, comma-joined — the exact env-var format.
+        assert cli._prompt_toolsets() == "ads,ga4"

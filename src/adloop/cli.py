@@ -193,12 +193,16 @@ def _generate_config_yaml(
     return "\n".join(lines)
 
 
-def _generate_cursor_snippet() -> str:
+def _mcp_json_snippet(toolsets: str = "") -> str:
+    """mcpServers JSON block (Cursor and Claude Code use the same shape)."""
     python_path = sys.executable
+    env_line = (
+        f'\n      "env": {{ "ADLOOP_TOOLSETS": "{toolsets}" }},' if toolsets else ""
+    )
     return textwrap.dedent(f"""\
         {{
           "mcpServers": {{
-            "adloop": {{
+            "adloop": {{{env_line}
               "command": "{python_path}",
               "args": ["-m", "adloop"]
             }}
@@ -207,26 +211,50 @@ def _generate_cursor_snippet() -> str:
     """).strip()
 
 
-def _generate_claude_code_snippet() -> str:
+def _generate_cursor_snippet(toolsets: str = "") -> str:
+    return _mcp_json_snippet(toolsets)
+
+
+def _generate_claude_code_snippet(toolsets: str = "") -> str:
     """Generate the Claude Code CLI command to add AdLoop as an MCP server."""
     python_path = sys.executable
     quoted = f'"{python_path}"' if " " in python_path else python_path
-    return f"claude mcp add --transport stdio adloop -- {quoted} -m adloop"
+    env = f" --env ADLOOP_TOOLSETS={toolsets}" if toolsets else ""
+    return f"claude mcp add --transport stdio adloop{env} -- {quoted} -m adloop"
 
 
-def _generate_claude_json_snippet() -> str:
+def _generate_claude_json_snippet(toolsets: str = "") -> str:
     """Generate .mcp.json configuration for Claude Code."""
-    python_path = sys.executable
-    return textwrap.dedent(f"""\
-        {{
-          "mcpServers": {{
-            "adloop": {{
-              "command": "{python_path}",
-              "args": ["-m", "adloop"]
-            }}
-          }}
-        }}
-    """).strip()
+    return _mcp_json_snippet(toolsets)
+
+
+def _prompt_toolsets() -> str:
+    """Optional toolset subset for the MCP client's env ("" = everything).
+
+    Client-side (env), not config.yaml: the same machine can run one
+    full-catalog client and one trimmed client off one AdLoop config.
+    """
+    from adloop.server import TOOLSETS
+
+    _print("  AdLoop can expose only some toolsets to your AI client —")
+    _print("  a smaller tool list costs less context per conversation.")
+    _print()
+    for slug, description in TOOLSETS.items():
+        _print(f"    {slug:<9} {description}")
+    _print()
+    _print("  (health_check and confirm_and_apply are always included.)")
+    if _prompt_bool("Expose the full toolset?", default=True):
+        return ""
+    while True:
+        raw = _prompt("Toolsets (comma-separated, e.g. ads,ga4)")
+        chosen = [part.strip().lower() for part in raw.split(",") if part.strip()]
+        unknown = [slug for slug in chosen if slug not in TOOLSETS]
+        if chosen and not unknown:
+            return ",".join(dict.fromkeys(chosen))
+        _print(
+            f"    ⚠  Unknown toolset(s): {', '.join(unknown) or '(none given)'}."
+            f" Valid: {', '.join(TOOLSETS)}"
+        )
 
 
 def _step_header(num: int, title: str) -> None:
@@ -556,6 +584,11 @@ def _run_wizard_post_config(
     _CONFIG_PATH.write_text(config_yaml)
     _print(f"  ✓ Config written to {_CONFIG_PATH}")
 
+    # Toolset subset (optional, client-side env)
+    step_num += 1
+    _step_header(step_num, "Toolsets (optional)")
+    toolsets = _prompt_toolsets()
+
     # MCP configuration snippets
     _print()
     _print("  ── MCP Configuration ──")
@@ -564,7 +597,7 @@ def _run_wizard_post_config(
     _print()
     _print("  For Cursor, add to .cursor/mcp.json:")
     _print()
-    cursor_snippet = _generate_cursor_snippet()
+    cursor_snippet = _generate_cursor_snippet(toolsets)
     for line in cursor_snippet.splitlines():
         _print(f"    {line}")
     _print()
@@ -574,13 +607,17 @@ def _run_wizard_post_config(
     _print()
     _print("  For Claude Code, run:")
     _print()
-    _print(f"    {_generate_claude_code_snippet()}")
+    _print(f"    {_generate_claude_code_snippet(toolsets)}")
     _print()
     _print("  Or add to your project's .mcp.json:")
     _print()
-    claude_snippet = _generate_claude_json_snippet()
+    claude_snippet = _generate_claude_json_snippet(toolsets)
     for line in claude_snippet.splitlines():
         _print(f"    {line}")
+    if toolsets:
+        _print()
+        _print("  (Toolsets are set per client — edit ADLOOP_TOOLSETS in the")
+        _print("   snippet above anytime to widen or narrow the selection.)")
     _print()
     _print("  (Or run `adloop install-rules` after this wizard to install")
     _print("   rules + slash commands automatically into ~/.claude/.)")
