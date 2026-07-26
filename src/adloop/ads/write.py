@@ -270,17 +270,49 @@ def _build_public_only_opener():
     return urllib.request.build_opener(_PublicOnlyRedirectHandler)
 
 
-def _validate_urls(urls: list[str], timeout: int = 10) -> dict[str, str | None]:
+# Statuses that say nothing about whether the landing page is any good:
+# the site is throttling us, or is briefly unwell. Refusing to draft an ad
+# over one punishes the advertiser for their own rate limiting — and we
+# are frequently the cause of it, since drafting several ads at once fires
+# several HEAD requests at the same origin within a second or two.
+#
+# A genuinely dead URL still blocks: 404 and 410 are the cases this check
+# exists for, and they do not resolve themselves on a retry.
+_INCONCLUSIVE_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def _validate_urls(
+    urls: list[str], timeout: int = 10
+) -> tuple[dict[str, str | None], dict[str, str]]:
     """Check that each URL returns a 2xx/3xx status.
 
-    Returns a dict of {url: error_message_or_None}. None means the URL is fine.
+    Returns (errors, warnings). ``errors`` maps url -> message for URLs
+    that should block the operation, None when fine. ``warnings`` maps
+    url -> message for checks that came back inconclusive; callers should
+    surface those but proceed, because the alternative is refusing to work
+    whenever the advertiser's own site is briefly throttling or flaky.
     """
     import urllib.request
     import urllib.error
 
     opener = _build_public_only_opener()
 
-    results = {}
+    results: dict[str, str | None] = {}
+    warnings: dict[str, str] = {}
+
+    def _record_status(url: str, status: int) -> None:
+        if status in _INCONCLUSIVE_STATUSES:
+            results[url] = None
+            warnings[url] = (
+                f"HTTP {status} — could not verify the URL right now "
+                "(the site may be rate-limiting or temporarily down). "
+                "Proceeding without the check; confirm the page is live."
+            )
+        elif status >= 400:
+            results[url] = f"HTTP {status}"
+        else:
+            results[url] = None
+
     for url in urls:
         if not url:
             continue
@@ -292,10 +324,7 @@ def _validate_urls(urls: list[str], timeout: int = 10) -> dict[str, str | None]:
             req = urllib.request.Request(url, method="HEAD")
             req.add_header("User-Agent", "AdLoop-URLCheck/1.0")
             resp = opener.open(req, timeout=timeout)
-            if resp.status >= 400:
-                results[url] = f"HTTP {resp.status}"
-            else:
-                results[url] = None
+            _record_status(url, resp.status)
         except urllib.error.HTTPError as e:
             if e.code == 405:
                 # HEAD not allowed, try GET
@@ -303,18 +332,17 @@ def _validate_urls(urls: list[str], timeout: int = 10) -> dict[str, str | None]:
                     req = urllib.request.Request(url, method="GET")
                     req.add_header("User-Agent", "AdLoop-URLCheck/1.0")
                     resp = opener.open(req, timeout=timeout)
-                    if resp.status >= 400:
-                        results[url] = f"HTTP {resp.status}"
-                    else:
-                        results[url] = None
+                    _record_status(url, resp.status)
+                except urllib.error.HTTPError as e2:
+                    _record_status(url, e2.code)
                 except Exception as e2:
                     results[url] = str(e2)
             else:
-                results[url] = f"HTTP {e.code}"
+                _record_status(url, e.code)
         except Exception as e:
             results[url] = str(e)
 
-    return results
+    return results, warnings
 
 
 def _normalize_display_network_setting(
@@ -467,7 +495,7 @@ def draft_responsive_search_ad(
     if errors:
         return {"error": "Validation failed", "details": errors}
 
-    url_check = _validate_urls([final_url])
+    url_check, url_warnings = _validate_urls([final_url])
     if url_check.get(final_url):
         return {
             "error": "URL validation failed",
@@ -478,6 +506,8 @@ def draft_responsive_search_ad(
         }
 
     warnings = []
+    if url_warnings.get(final_url):
+        warnings.append(f"final_url '{final_url}': {url_warnings[final_url]}")
     if len(headlines) < 8:
         warnings.append(
             f"Only {len(headlines)} headlines provided. Google recommends 8-15 "
@@ -1703,7 +1733,7 @@ def draft_sitelinks(
         return {"error": "Validation failed", "details": errors}
 
     sitelink_urls = [sl["final_url"] for sl in validated]
-    url_checks = _validate_urls(sitelink_urls)
+    url_checks, url_warnings = _validate_urls(sitelink_urls)
     bad_urls = {u: err for u, err in url_checks.items() if err}
     if bad_urls:
         return {
@@ -1712,6 +1742,7 @@ def draft_sitelinks(
                 f"'{url}' is not reachable: {err}" for url, err in bad_urls.items()
             ],
         }
+    warnings.extend(f"'{url}': {msg}" for url, msg in url_warnings.items())
 
     if len(validated) < 2:
         warnings.append(

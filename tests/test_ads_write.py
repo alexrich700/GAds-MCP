@@ -1482,7 +1482,8 @@ def test_draft_responsive_search_ad_accepts_json_string_list(config, monkeypatch
 
     # Bypass URL reachability check so the test doesn't make a network call.
     monkeypatch.setattr(
-        "adloop.ads.write._validate_urls", lambda urls, timeout=10: {u: None for u in urls}
+        "adloop.ads.write._validate_urls",
+        lambda urls, timeout=10: ({u: None for u in urls}, {}),
     )
 
     headlines = [
@@ -2447,3 +2448,86 @@ def test_apply_detach_shared_set_from_campaigns_surfaces_partial_failure():
     failed = result["failed_campaigns"][0]
     assert failed["campaign_id"] == "1001"
     assert failed["operation_index"] == 0
+
+
+# --- URL check: transient failures must not block drafting -----------------
+#
+# A beta user's storefront returned 429 to our reachability checks — partly
+# because drafting several ads at once fires several HEADs at one origin —
+# and every draft was refused as "not reachable". Rate limiting says nothing
+# about whether the landing page is good.
+
+
+def _fake_opener(status_by_url):
+    """Opener stub returning a canned status per URL."""
+
+    class _Resp:
+        def __init__(self, status):
+            self.status = status
+
+    class _Opener:
+        def open(self, req, timeout=None):
+            return _Resp(status_by_url[req.full_url])
+
+    return _Opener()
+
+
+def test_rate_limited_url_warns_instead_of_blocking(monkeypatch):
+    from adloop.ads import write
+
+    url = "https://shop.example.com/collections/x"
+    monkeypatch.setattr(write, "_ssrf_error", lambda u: None)
+    monkeypatch.setattr(
+        write, "_build_public_only_opener", lambda: _fake_opener({url: 429})
+    )
+
+    errors, warnings = write._validate_urls([url])
+
+    assert errors[url] is None, "429 must not block the draft"
+    assert "429" in warnings[url]
+
+
+def test_server_errors_are_also_treated_as_inconclusive(monkeypatch):
+    from adloop.ads import write
+
+    url = "https://shop.example.com/down"
+    monkeypatch.setattr(write, "_ssrf_error", lambda u: None)
+    monkeypatch.setattr(
+        write, "_build_public_only_opener", lambda: _fake_opener({url: 503})
+    )
+
+    errors, warnings = write._validate_urls([url])
+
+    assert errors[url] is None
+    assert "503" in warnings[url]
+
+
+def test_a_dead_page_still_blocks(monkeypatch):
+    """The check exists for 404s — those do not resolve on a retry."""
+    from adloop.ads import write
+
+    url = "https://shop.example.com/gone"
+    monkeypatch.setattr(write, "_ssrf_error", lambda u: None)
+    monkeypatch.setattr(
+        write, "_build_public_only_opener", lambda: _fake_opener({url: 404})
+    )
+
+    errors, warnings = write._validate_urls([url])
+
+    assert errors[url] == "HTTP 404"
+    assert url not in warnings
+
+
+def test_a_healthy_page_passes_clean(monkeypatch):
+    from adloop.ads import write
+
+    url = "https://shop.example.com/live"
+    monkeypatch.setattr(write, "_ssrf_error", lambda u: None)
+    monkeypatch.setattr(
+        write, "_build_public_only_opener", lambda: _fake_opener({url: 200})
+    )
+
+    errors, warnings = write._validate_urls([url])
+
+    assert errors[url] is None
+    assert warnings == {}
