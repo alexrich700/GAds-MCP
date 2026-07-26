@@ -9,6 +9,25 @@ except PackageNotFoundError:  # running from a source tree without install
     __version__ = "0.0.0.dev0"
 
 
+def install_runtime_patches() -> None:
+    """Arm the upstream-bug workarounds for a long-running host process.
+
+    Importing ``adloop.server`` is deliberately free of process-global side
+    effects so the server can be embedded in an ASGI app. That leaves the
+    workarounds in ``_mcp_patches`` unarmed for any embedder, including a
+    hosted deployment, which is exactly where they matter most: the
+    cancellation race they guard against (python-sdk#2416) fires when a
+    host cancels a slow tool call, and it takes the transport down with it.
+
+    Embedders should call this once during application startup. It is
+    idempotent, never raises, and each patch inside self-disarms once the
+    upstream bug it tracks is fixed.
+    """
+    from adloop import _mcp_patches
+
+    _mcp_patches.install()
+
+
 def main() -> None:
     """Entry point for `adloop` console script.
 
@@ -50,10 +69,10 @@ def main() -> None:
     # the stdio cancellation-race monkeypatch) are deliberately installed
     # here — in the stdio entry point — rather than at adloop.server import
     # time, so embedding the server in an ASGI app stays side-effect-free.
-    from adloop import _mcp_patches, diagnostics
+    from adloop import diagnostics
 
     diagnostics.install()
-    _mcp_patches.install()
+    install_runtime_patches()
 
     from adloop.server import mcp
 
