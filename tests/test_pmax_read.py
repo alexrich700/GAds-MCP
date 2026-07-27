@@ -70,7 +70,7 @@ class TestGetPmaxCampaigns:
         assert row["metrics.cpa"] == 10.0
         assert row["metrics.roas"] == 10.0  # 800 / 80
         assert row["campaign_budget.amount"] == 25.0
-        assert row["metrics.average_cpc_eur"] == 0.4
+        assert row["metrics.average_cpc_amount"] == 0.4
 
     @patch("adloop.ads.gaql.execute_query")
     def test_with_date_range(self, mock_query, config):

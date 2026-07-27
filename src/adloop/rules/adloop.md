@@ -655,9 +655,6 @@ LIMIT n
 | `asset_group_signal` | Search themes and audience signals attached to PMax asset groups |
 | `asset_group_top_combination_view` | Top serving combinations Google has assembled for PMax |
 | `campaign_search_term_insight` | Aggregated PMax search-term categories (v23.2+, no individual queries) |
-| `asset_group` | PMax asset group data (ad strength, status) |
-| `asset_group_asset` | PMax per-asset performance labels |
-| `asset_group_top_combination_view` | PMax top asset combinations |
 | `recommendation` | Google's auto-generated recommendations |
 | `ad_group_audience_view` | Audience segment performance |
 
