@@ -73,15 +73,31 @@ def _transport_kwargs() -> dict:
     return kwargs
 
 
+def _prepare_server():
+    """Configure server mode and install the hosting shell, return the mcp server.
+
+    Order matters: ``install_auth`` must run before ``http_app()`` (the OAuth
+    routes are built from ``mcp.auth``), and ``install_credentials_provider``
+    must run before any tool executes (server mode refuses the default
+    local-file provider).
+    """
+    _configure_server_runtime()
+    from adloop.hosting.auth import install_auth
+    from adloop.hosting.credentials import install_credentials_provider
+    from adloop.server import mcp
+
+    install_auth(mcp)  # Supabase auth + tenant middleware (if configured)
+    install_credentials_provider()  # per-user Google creds provider
+    return mcp
+
+
 def create_app():
     """Build the streamable-HTTP ASGI app in server mode.
 
     Use with an external ASGI server, e.g.
     ``uvicorn adloop.asgi:create_app --factory``.
     """
-    _configure_server_runtime()
-    from adloop.server import mcp
-
+    mcp = _prepare_server()
     return mcp.http_app(**_transport_kwargs())
 
 
@@ -91,8 +107,7 @@ def main() -> None:
     Binds ``$HOST`` (default 0.0.0.0) : ``$PORT`` (default 8080) over
     streamable HTTP.
     """
-    _configure_server_runtime()
-    from adloop.server import mcp
+    mcp = _prepare_server()
 
     host = os.environ.get("HOST", _DEFAULT_HOST)
     port = int(os.environ.get("PORT", str(_DEFAULT_PORT)))
