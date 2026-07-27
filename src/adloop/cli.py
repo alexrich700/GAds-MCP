@@ -214,7 +214,10 @@ def _generate_config_yaml(
 
 def _mcp_json_snippet(toolsets: str = "") -> str:
     """mcpServers JSON block (Cursor and Claude Code use the same shape)."""
-    python_path = sys.executable
+    import json
+
+    # json.dumps escapes the path so Windows backslashes stay valid JSON.
+    python_path = json.dumps(sys.executable)
     env_line = (
         f'\n      "env": {{ "ADLOOP_TOOLSETS": "{toolsets}" }},' if toolsets else ""
     )
@@ -222,7 +225,7 @@ def _mcp_json_snippet(toolsets: str = "") -> str:
         {{
           "mcpServers": {{
             "adloop": {{{env_line}
-              "command": "{python_path}",
+              "command": {python_path},
               "args": ["-m", "adloop"]
             }}
           }}

@@ -60,7 +60,7 @@ EXISTING_RSA = {
 
 
 class TestDraftRsaReplacement:
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_happy_path_returns_preview_with_diff(
         self, mock_fetch, mock_urls, config
@@ -137,7 +137,7 @@ class TestDraftRsaReplacement:
         assert "error" in result
         assert "removed" in result["error"].lower()
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_too_few_headlines(self, mock_fetch, mock_urls, config):
         mock_fetch.return_value = EXISTING_RSA
@@ -151,7 +151,7 @@ class TestDraftRsaReplacement:
         )
         assert "error" in result
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_headline_over_30_chars(self, mock_fetch, mock_urls, config):
         mock_fetch.return_value = EXISTING_RSA
@@ -170,7 +170,7 @@ class TestDraftRsaReplacement:
         )
         assert "error" in result
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_inherits_final_url_from_old_ad(self, mock_fetch, mock_urls, config):
         mock_fetch.return_value = EXISTING_RSA
@@ -187,7 +187,7 @@ class TestDraftRsaReplacement:
 
         remove_plan(result["plan_id"])
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_default_removes_old_with_double_confirm(
         self, mock_fetch, mock_urls, config
@@ -208,7 +208,7 @@ class TestDraftRsaReplacement:
         assert plan.requires_double_confirm is True
         remove_plan(result["plan_id"])
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_keep_old_paused_no_double_confirm(
         self, mock_fetch, mock_urls, config
@@ -242,7 +242,7 @@ class TestDraftRsaReplacement:
 
     @patch(
         "adloop.ads.write._validate_urls",
-        return_value={"https://broken.example.com": "Connection refused"},
+        return_value=({"https://broken.example.com": "Connection refused"}, {}),
     )
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_url_validation_failure(self, mock_fetch, mock_urls, config):
@@ -258,7 +258,7 @@ class TestDraftRsaReplacement:
         assert "error" in result
         assert "not reachable" in result.get("details", [""])[0]
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_old_copy_in_changes(self, mock_fetch, mock_urls, config):
         """The plan changes should include old_copy for audit/diff purposes."""
@@ -408,7 +408,7 @@ class TestValidateRsaPinning:
 class TestDraftRsaWithPinning:
     """Tests for pinning in draft_responsive_search_ad."""
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     def test_pinned_headlines_stored_in_plan(self, mock_urls, config):
         headlines = [
             {"text": "Pinned Headline", "pinned_field": "HEADLINE_1"},
@@ -431,7 +431,7 @@ class TestDraftRsaWithPinning:
         assert stored[1] == {"text": "Unpinned Headline Two", "pinned_field": None}
         remove_plan(result["plan_id"])
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     def test_pinned_descriptions_stored_in_plan(self, mock_urls, config):
         headlines = VALID_HEADLINES
         descs = [
@@ -453,7 +453,7 @@ class TestDraftRsaWithPinning:
         assert stored[1]["pinned_field"] is None
         remove_plan(result["plan_id"])
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     def test_invalid_pin_rejected(self, mock_urls, config):
         headlines = [
             {"text": "Bad Pin", "pinned_field": "HEADLINE_99"},
@@ -476,7 +476,7 @@ class TestDraftRsaWithPinning:
 class TestDraftRsaReplacementWithPinning:
     """Tests for pinning in draft_rsa_replacement."""
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_pinned_new_headlines_in_diff(self, mock_fetch, mock_urls, config):
         mock_fetch.return_value = EXISTING_RSA
@@ -498,7 +498,7 @@ class TestDraftRsaReplacementWithPinning:
         assert new_h[1] == {"text": "Replacement Two", "pinned_field": None}
         remove_plan(result["plan_id"])
 
-    @patch("adloop.ads.write._validate_urls", return_value={})
+    @patch("adloop.ads.write._validate_urls", return_value=({}, {}))
     @patch("adloop.ads.write._fetch_existing_rsa")
     def test_pinned_old_headlines_preserved(self, mock_fetch, mock_urls, config):
         """When the existing RSA has pinned assets (returned as dicts from GAQL),
