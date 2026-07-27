@@ -80,11 +80,11 @@ class TestDraftRsaReplacement:
         assert result["operation"] == "replace_responsive_search_ad"
         assert "diff" in result
         assert result["diff"]["old"]["headlines"] == [
-            {"text": h, "pinned_to": None}
+            {"text": h, "pinned_field": None}
             for h in EXISTING_RSA["ad_group_ad.ad.responsive_search_ad.headlines"]
         ]
         assert result["diff"]["new"]["headlines"] == [
-            {"text": h, "pinned_to": None} for h in VALID_HEADLINES
+            {"text": h, "pinned_field": None} for h in VALID_HEADLINES
         ]
         assert result["diff"]["old_ad_action"] == "REMOVE"
 
@@ -273,7 +273,7 @@ class TestDraftRsaReplacement:
         plan = get_plan(result["plan_id"])
         assert "old_copy" in plan.changes
         assert plan.changes["old_copy"]["headlines"] == [
-            {"text": h, "pinned_to": None}
+            {"text": h, "pinned_field": None}
             for h in EXISTING_RSA["ad_group_ad.ad.responsive_search_ad.headlines"]
         ]
         remove_plan(result["plan_id"])
@@ -285,30 +285,30 @@ class TestNormalizeAssets:
     def test_plain_strings(self):
         result = _normalize_assets(["Hello", "World"])
         assert result == [
-            {"text": "Hello", "pinned_to": None},
-            {"text": "World", "pinned_to": None},
+            {"text": "Hello", "pinned_field": None},
+            {"text": "World", "pinned_field": None},
         ]
 
     def test_dicts_with_pinning(self):
         result = _normalize_assets([
-            {"text": "Pinned One", "pinned_to": "HEADLINE_1"},
+            {"text": "Pinned One", "pinned_field": "HEADLINE_1"},
             {"text": "Unpinned"},
         ])
         assert result == [
-            {"text": "Pinned One", "pinned_to": "HEADLINE_1"},
-            {"text": "Unpinned", "pinned_to": None},
+            {"text": "Pinned One", "pinned_field": "HEADLINE_1"},
+            {"text": "Unpinned", "pinned_field": None},
         ]
 
     def test_mixed_str_and_dict(self):
         result = _normalize_assets([
             "Plain string",
-            {"text": "Pinned", "pinned_to": "HEADLINE_2"},
+            {"text": "Pinned", "pinned_field": "HEADLINE_2"},
             {"text": "Dict no pin"},
         ])
         assert len(result) == 3
-        assert result[0] == {"text": "Plain string", "pinned_to": None}
-        assert result[1] == {"text": "Pinned", "pinned_to": "HEADLINE_2"}
-        assert result[2] == {"text": "Dict no pin", "pinned_to": None}
+        assert result[0] == {"text": "Plain string", "pinned_field": None}
+        assert result[1] == {"text": "Pinned", "pinned_field": "HEADLINE_2"}
+        assert result[2] == {"text": "Dict no pin", "pinned_field": None}
 
     def test_empty_list(self):
         assert _normalize_assets([]) == []
@@ -316,11 +316,11 @@ class TestNormalizeAssets:
     def test_non_string_text_coerced(self):
         """Non-string text values (e.g. int) should be coerced to str."""
         result = _normalize_assets([
-            {"text": 123, "pinned_to": "HEADLINE_1"},
+            {"text": 123, "pinned_field": "HEADLINE_1"},
             {"text": None},
         ])
-        assert result[0] == {"text": "123", "pinned_to": "HEADLINE_1"}
-        assert result[1] == {"text": "", "pinned_to": None}
+        assert result[0] == {"text": "123", "pinned_field": "HEADLINE_1"}
+        assert result[1] == {"text": "", "pinned_field": None}
 
 
 class TestValidateRsaPinning:
@@ -328,78 +328,78 @@ class TestValidateRsaPinning:
 
     def test_valid_headline_pins(self):
         headlines = [
-            {"text": "H1", "pinned_to": "HEADLINE_1"},
-            {"text": "H2", "pinned_to": "HEADLINE_2"},
-            {"text": "H3", "pinned_to": "HEADLINE_3"},
+            {"text": "H1", "pinned_field": "HEADLINE_1"},
+            {"text": "H2", "pinned_field": "HEADLINE_2"},
+            {"text": "H3", "pinned_field": "HEADLINE_3"},
         ]
         descs = [
-            {"text": "D1 description that is long enough.", "pinned_to": None},
-            {"text": "D2 description that is also fine.", "pinned_to": None},
+            {"text": "D1 description that is long enough.", "pinned_field": None},
+            {"text": "D2 description that is also fine.", "pinned_field": None},
         ]
         errors = _validate_rsa("ag123", headlines, descs, "https://example.com")
         assert errors == []
 
     def test_valid_description_pins(self):
         headlines = [
-            {"text": "H1", "pinned_to": None},
-            {"text": "H2", "pinned_to": None},
-            {"text": "H3", "pinned_to": None},
+            {"text": "H1", "pinned_field": None},
+            {"text": "H2", "pinned_field": None},
+            {"text": "H3", "pinned_field": None},
         ]
         descs = [
-            {"text": "D1 description pinned to slot.", "pinned_to": "DESCRIPTION_1"},
-            {"text": "D2 description pinned too.", "pinned_to": "DESCRIPTION_2"},
+            {"text": "D1 description pinned to slot.", "pinned_field": "DESCRIPTION_1"},
+            {"text": "D2 description pinned too.", "pinned_field": "DESCRIPTION_2"},
         ]
         errors = _validate_rsa("ag123", headlines, descs, "https://example.com")
         assert errors == []
 
     def test_invalid_headline_pin_rejected(self):
         headlines = [
-            {"text": "H1", "pinned_to": "HEADLINE_4"},
-            {"text": "H2", "pinned_to": None},
-            {"text": "H3", "pinned_to": None},
+            {"text": "H1", "pinned_field": "HEADLINE_4"},
+            {"text": "H2", "pinned_field": None},
+            {"text": "H3", "pinned_field": None},
         ]
         descs = [
-            {"text": "D1 description text here.", "pinned_to": None},
-            {"text": "D2 description text here.", "pinned_to": None},
+            {"text": "D1 description text here.", "pinned_field": None},
+            {"text": "D2 description text here.", "pinned_field": None},
         ]
         errors = _validate_rsa("ag123", headlines, descs, "https://example.com")
         assert any("HEADLINE_4" in e for e in errors)
 
     def test_description_pin_on_headline_rejected(self):
         headlines = [
-            {"text": "H1", "pinned_to": "DESCRIPTION_1"},
-            {"text": "H2", "pinned_to": None},
-            {"text": "H3", "pinned_to": None},
+            {"text": "H1", "pinned_field": "DESCRIPTION_1"},
+            {"text": "H2", "pinned_field": None},
+            {"text": "H3", "pinned_field": None},
         ]
         descs = [
-            {"text": "D1 description text here.", "pinned_to": None},
-            {"text": "D2 description text here.", "pinned_to": None},
+            {"text": "D1 description text here.", "pinned_field": None},
+            {"text": "D2 description text here.", "pinned_field": None},
         ]
         errors = _validate_rsa("ag123", headlines, descs, "https://example.com")
         assert any("DESCRIPTION_1" in e for e in errors)
 
     def test_headline_pin_on_description_rejected(self):
         headlines = [
-            {"text": "H1", "pinned_to": None},
-            {"text": "H2", "pinned_to": None},
-            {"text": "H3", "pinned_to": None},
+            {"text": "H1", "pinned_field": None},
+            {"text": "H2", "pinned_field": None},
+            {"text": "H3", "pinned_field": None},
         ]
         descs = [
-            {"text": "D1 description text here.", "pinned_to": "HEADLINE_1"},
-            {"text": "D2 description text here.", "pinned_to": None},
+            {"text": "D1 description text here.", "pinned_field": "HEADLINE_1"},
+            {"text": "D2 description text here.", "pinned_field": None},
         ]
         errors = _validate_rsa("ag123", headlines, descs, "https://example.com")
         assert any("HEADLINE_1" in e for e in errors)
 
     def test_missing_text_rejected(self):
         headlines = [
-            {"text": "", "pinned_to": None},
-            {"text": "H2", "pinned_to": None},
-            {"text": "H3", "pinned_to": None},
+            {"text": "", "pinned_field": None},
+            {"text": "H2", "pinned_field": None},
+            {"text": "H3", "pinned_field": None},
         ]
         descs = [
-            {"text": "D1 description text here.", "pinned_to": None},
-            {"text": "D2 description text here.", "pinned_to": None},
+            {"text": "D1 description text here.", "pinned_field": None},
+            {"text": "D2 description text here.", "pinned_field": None},
         ]
         errors = _validate_rsa("ag123", headlines, descs, "https://example.com")
         assert any("missing" in e.lower() for e in errors)
@@ -411,7 +411,7 @@ class TestDraftRsaWithPinning:
     @patch("adloop.ads.write._validate_urls", return_value={})
     def test_pinned_headlines_stored_in_plan(self, mock_urls, config):
         headlines = [
-            {"text": "Pinned Headline", "pinned_to": "HEADLINE_1"},
+            {"text": "Pinned Headline", "pinned_field": "HEADLINE_1"},
             "Unpinned Headline Two",
             "Unpinned Headline Three",
         ]
@@ -427,15 +427,15 @@ class TestDraftRsaWithPinning:
         assert "plan_id" in result
         plan = get_plan(result["plan_id"])
         stored = plan.changes["headlines"]
-        assert stored[0] == {"text": "Pinned Headline", "pinned_to": "HEADLINE_1"}
-        assert stored[1] == {"text": "Unpinned Headline Two", "pinned_to": None}
+        assert stored[0] == {"text": "Pinned Headline", "pinned_field": "HEADLINE_1"}
+        assert stored[1] == {"text": "Unpinned Headline Two", "pinned_field": None}
         remove_plan(result["plan_id"])
 
     @patch("adloop.ads.write._validate_urls", return_value={})
     def test_pinned_descriptions_stored_in_plan(self, mock_urls, config):
         headlines = VALID_HEADLINES
         descs = [
-            {"text": "Pinned desc stored in plan changes.", "pinned_to": "DESCRIPTION_1"},
+            {"text": "Pinned desc stored in plan changes.", "pinned_field": "DESCRIPTION_1"},
             "Unpinned description number two for testing.",
         ]
         result = draft_responsive_search_ad(
@@ -449,14 +449,14 @@ class TestDraftRsaWithPinning:
         assert "plan_id" in result
         plan = get_plan(result["plan_id"])
         stored = plan.changes["descriptions"]
-        assert stored[0]["pinned_to"] == "DESCRIPTION_1"
-        assert stored[1]["pinned_to"] is None
+        assert stored[0]["pinned_field"] == "DESCRIPTION_1"
+        assert stored[1]["pinned_field"] is None
         remove_plan(result["plan_id"])
 
     @patch("adloop.ads.write._validate_urls", return_value={})
     def test_invalid_pin_rejected(self, mock_urls, config):
         headlines = [
-            {"text": "Bad Pin", "pinned_to": "HEADLINE_99"},
+            {"text": "Bad Pin", "pinned_field": "HEADLINE_99"},
             "H2",
             "H3",
         ]
@@ -481,7 +481,7 @@ class TestDraftRsaReplacementWithPinning:
     def test_pinned_new_headlines_in_diff(self, mock_fetch, mock_urls, config):
         mock_fetch.return_value = EXISTING_RSA
         headlines = [
-            {"text": "Pinned Replacement", "pinned_to": "HEADLINE_1"},
+            {"text": "Pinned Replacement", "pinned_field": "HEADLINE_1"},
             "Replacement Two",
             "Replacement Three",
         ]
@@ -494,8 +494,8 @@ class TestDraftRsaReplacementWithPinning:
         )
         assert "plan_id" in result
         new_h = result["diff"]["new"]["headlines"]
-        assert new_h[0] == {"text": "Pinned Replacement", "pinned_to": "HEADLINE_1"}
-        assert new_h[1] == {"text": "Replacement Two", "pinned_to": None}
+        assert new_h[0] == {"text": "Pinned Replacement", "pinned_field": "HEADLINE_1"}
+        assert new_h[1] == {"text": "Replacement Two", "pinned_field": None}
         remove_plan(result["plan_id"])
 
     @patch("adloop.ads.write._validate_urls", return_value={})
@@ -505,7 +505,7 @@ class TestDraftRsaReplacementWithPinning:
         the old_copy in the diff should preserve the pinning info."""
         pinned_existing = dict(EXISTING_RSA)
         pinned_existing["ad_group_ad.ad.responsive_search_ad.headlines"] = [
-            {"text": "Pinned Old", "pinned_to": "HEADLINE_1"},
+            {"text": "Pinned Old", "pinned_field": "HEADLINE_1"},
             "Unpinned Old Two",
             "Unpinned Old Three",
         ]
@@ -519,6 +519,6 @@ class TestDraftRsaReplacementWithPinning:
         )
         assert "plan_id" in result
         old_h = result["diff"]["old"]["headlines"]
-        assert old_h[0] == {"text": "Pinned Old", "pinned_to": "HEADLINE_1"}
-        assert old_h[1] == {"text": "Unpinned Old Two", "pinned_to": None}
+        assert old_h[0] == {"text": "Pinned Old", "pinned_field": "HEADLINE_1"}
+        assert old_h[1] == {"text": "Unpinned Old Two", "pinned_field": None}
         remove_plan(result["plan_id"])

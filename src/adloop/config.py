@@ -12,7 +12,7 @@ import yaml
 @dataclass
 class GoogleConfig:
     project_id: str = ""
-    credentials_path: str = "~/.adloop/credentials.json"
+    credentials_path: str = ""  # empty = ~/.adloop/credentials.json, else Application Default Credentials
     token_path: str = "~/.adloop/token.json"
 
 
@@ -33,10 +33,31 @@ class AdsConfig:
 
 
 @dataclass
+class GscConfig:
+    site_url: str = ""  # e.g. "https://example.com/" or "sc-domain:example.com"
+
+
+@dataclass
+class GtmConfig:
+    account_id: str = ""
+    container_id: str = ""
+
+
+@dataclass
+class PageSpeedConfig:
+    api_key: str = ""  # optional — keyless PSI calls work but are rate-limited
+
+
+@dataclass
 class SafetyConfig:
     max_daily_budget: float = 50.0
     max_bid_increase_pct: int = 100
     require_dry_run: bool = True
+    # Two-phase apply: confirm_and_apply refuses dry_run=false for a plan
+    # that has not completed a dry-run pass yet. Unlike require_dry_run
+    # (which blocks real writes entirely), this only enforces the order:
+    # preview first, apply second.
+    two_phase_apply: bool = False
     log_file: str = "~/.adloop/audit.log"
     blocked_operations: list[str] = field(default_factory=list)
 
@@ -46,7 +67,14 @@ class AdLoopConfig:
     google: GoogleConfig = field(default_factory=GoogleConfig)
     ga4: GA4Config = field(default_factory=GA4Config)
     ads: AdsConfig = field(default_factory=AdsConfig)
+    gsc: GscConfig = field(default_factory=GscConfig)
+    gtm: GtmConfig = field(default_factory=GtmConfig)
+    pagespeed: PageSpeedConfig = field(default_factory=PageSpeedConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
+    # Absolute path the config was resolved from (even if it did not exist
+    # on disk when loaded). Used by the runtime to tell callers exactly
+    # which file to edit when a safety flag overrides their request.
+    source_path: str = ""
 
 
 def _resolve_path(path_str: str) -> Path:
@@ -66,9 +94,10 @@ def load_config(config_path: str | None = None) -> AdLoopConfig:
         config_path = os.environ.get("ADLOOP_CONFIG", "~/.adloop/config.yaml")
 
     path = _resolve_path(config_path)
+    resolved = str(path)
 
     if not path.exists():
-        return AdLoopConfig()
+        return AdLoopConfig(source_path=resolved)
 
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
@@ -76,12 +105,15 @@ def load_config(config_path: str | None = None) -> AdLoopConfig:
     google_raw = raw.get("google", {})
     ga4_raw = raw.get("ga4", {})
     ads_raw = raw.get("ads", {})
+    gsc_raw = raw.get("gsc", {})
+    gtm_raw = raw.get("gtm", {})
+    pagespeed_raw = raw.get("pagespeed", {})
     safety_raw = raw.get("safety", {})
 
     return AdLoopConfig(
         google=GoogleConfig(
             project_id=google_raw.get("project_id", ""),
-            credentials_path=google_raw.get("credentials_path", "~/.adloop/credentials.json"),
+            credentials_path=google_raw.get("credentials_path", ""),
             token_path=google_raw.get("token_path", "~/.adloop/token.json"),
         ),
         ga4=GA4Config(
@@ -92,11 +124,23 @@ def load_config(config_path: str | None = None) -> AdLoopConfig:
             customer_id=ads_raw.get("customer_id", ""),
             login_customer_id=ads_raw.get("login_customer_id", ""),
         ),
+        gsc=GscConfig(
+            site_url=gsc_raw.get("site_url", ""),
+        ),
+        gtm=GtmConfig(
+            account_id=str(gtm_raw.get("account_id", "")),
+            container_id=str(gtm_raw.get("container_id", "")),
+        ),
+        pagespeed=PageSpeedConfig(
+            api_key=str(pagespeed_raw.get("api_key", "")),
+        ),
         safety=SafetyConfig(
             max_daily_budget=safety_raw.get("max_daily_budget", 50.0),
             max_bid_increase_pct=safety_raw.get("max_bid_increase_pct", 100),
             require_dry_run=safety_raw.get("require_dry_run", True),
+            two_phase_apply=safety_raw.get("two_phase_apply", False),
             log_file=safety_raw.get("log_file", "~/.adloop/audit.log"),
             blocked_operations=safety_raw.get("blocked_operations", []),
         ),
+        source_path=resolved,
     )

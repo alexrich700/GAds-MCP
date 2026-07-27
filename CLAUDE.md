@@ -17,14 +17,14 @@ python scripts/sync-rules.py  # Sync rules: .cursor/rules/ -> .claude/rules/
 ```
 src/adloop/
 ├── __init__.py        # Entry point — routes 'adloop init' vs MCP server
-├── server.py          # FastMCP server — 56 tool registrations (incl. 8 PMax read, 5 PMax write, 4 label)
+├── server.py          # FastMCP server — all tool registrations + toolset tags
 ├── config.py          # Config loader (~/.adloop/config.yaml)
-├── auth.py            # OAuth 2.0 + service account + token refresh
-├── cli.py             # Interactive setup wizard
+├── auth.py            # OAuth 2.0 (user-supplied credentials, headless fallback) + service accounts + token refresh
+├── cli.py             # Interactive setup wizard (own Google Cloud project + auto-discovery)
 ├── crossref.py        # Cross-reference tools (GA4 + Ads, incl. analyze_pmax_performance)
 ├── tracking.py        # Tracking validation + code generation
 ├── ga4/               # GA4 Data + Admin API (reports, realtime, events)
-├── ads/               # Google Ads API (read, write, GAQL, forecasting, pmax_read, pmax_write, labels)
+├── ads/               # Google Ads API (read, write, GAQL, forecasting, pmax_read, pmax_write, labels, recommendations)
 └── safety/            # Guards, previews, audit logging
 ```
 
@@ -34,18 +34,32 @@ All tool usage rules, safety protocols, orchestration patterns, GAQL reference, 
 
 **Read and follow `.claude/rules/adloop.md` for all AdLoop MCP tool orchestration.**
 
-That file is the complete guide for combining AdLoop's 56 tools (Search + Performance Max read & write + Image upload + Labels). It covers:
+That file is the complete guide for combining AdLoop's tools (Search + Performance Max read & write + Image upload + Labels + Recommendations). It covers:
 - Tool inventory with parameters and when to use each
-- 8 safety rules (budget caps, dry-run defaults, Broad Match prevention, pre-write validation)
-- 16 orchestration patterns (performance review, ad creation, tracking diagnosis, PMax diagnostics, etc.)
+- 9 safety rules (budget caps, dry-run defaults, Broad Match prevention, pre-write validation)
+- 16 orchestration patterns (performance review, PMax analysis & diagnostics, recommendations, ad creation, tracking diagnosis, etc.)
 - GAQL quick reference with syntax, common queries, and gotchas (incl. asset_group, asset_group_asset)
 - GDPR consent awareness for EU markets
 - Ad copy character limits and marketing best practices (incl. PMax-specific notes)
+
+## Documentation Site
+
+User docs live in the sibling repo `../adloop-docs` (Mintlify,
+docs.getadloop.com — push to main deploys). **After any tool or toolset
+change here, regenerate the docs tool reference and push it:**
+
+```bash
+cd ../adloop-docs && uv run --project ../adloop python scripts/generate_tools.py
+```
+
+`reference/tools.mdx` is generated from the live registry — never edit it
+by hand, and never state tool counts in prose anywhere (they rot).
 
 ## Safety Model (Summary)
 
 - Two-step writes: draft -> preview -> confirm_and_apply
 - dry_run=true by default; require_dry_run in config overrides
+- two_phase_apply in config: real applies refused (DRY_RUN_REQUIRED) until the plan had one dry-run pass; always on for cloud tenants
 - Budget caps enforced; new campaigns/ads created as PAUSED
 - Broad Match + Manual CPC automatically blocked
 - All mutations logged to ~/.adloop/audit.log
