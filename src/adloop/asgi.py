@@ -80,8 +80,10 @@ def create_app():
     ``uvicorn adloop.asgi:create_app --factory``.
     """
     _configure_server_runtime()
+    from adloop.hosting.auth import install_auth
     from adloop.server import mcp
 
+    install_auth(mcp)  # attaches Supabase auth + tenant middleware if configured
     return mcp.http_app(**_transport_kwargs())
 
 
@@ -92,7 +94,10 @@ def main() -> None:
     streamable HTTP.
     """
     _configure_server_runtime()
+    from adloop.hosting.auth import install_auth
     from adloop.server import mcp
+
+    install_auth(mcp)  # attaches Supabase auth + tenant middleware if configured
 
     host = os.environ.get("HOST", _DEFAULT_HOST)
     port = int(os.environ.get("PORT", str(_DEFAULT_PORT)))
