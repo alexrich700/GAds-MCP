@@ -11,17 +11,22 @@ def test_import_is_side_effect_free():
 
 
 def test_create_app_enables_server_mode_and_returns_asgi():
-    """create_app() builds an ASGI app and switches to server mode."""
+    """create_app() builds an ASGI app, switches to server mode, installs the provider."""
     import adloop.asgi as asgi
+    from adloop import auth as gauth
 
-    prior = runtime.deployment_mode()
+    prior_mode = runtime.deployment_mode()
+    prior_provider = gauth.get_credentials_provider()
     try:
         app = asgi.create_app()
         assert app is not None
         assert callable(app)  # ASGI apps are callables
         assert runtime.deployment_mode() == "server"
     finally:
-        runtime.set_deployment_mode(prior)
+        # create_app() mutates process globals (server mode + credentials
+        # provider) — restore them so other tests aren't affected.
+        runtime.set_deployment_mode(prior_mode)
+        gauth.set_credentials_provider(prior_provider)
 
 
 def test_env_list_parsing(monkeypatch):
