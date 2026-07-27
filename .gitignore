@@ -21,8 +21,9 @@ uv.lock
 docs/
 
 # IDE
-.idea/
+.idea/3
 .vscode/
+*.code-workspace
 
 # Cursor MCP config (contains local paths)
 .cursor/mcp.json
@@ -40,6 +41,7 @@ guides/
 
 # AdLoop credentials (should be in ~/.adloop/, not in repo)
 credentials.json
+!src/adloop/bundled_credentials.json
 token.json
 *.pem
 
@@ -47,3 +49,13 @@ token.json
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Local-only MCP debug tools (load via ADLOOP_DEBUG_TOOLS=1)
+src/adloop/_debug_tools.py
+
+# Local stderr capture from Cowork / Claude Desktop sessions
+adloop-cowork.log
+adloop-cowork.log.*
+
+# Machine-local Claude Code context
+CLAUDE.local.md

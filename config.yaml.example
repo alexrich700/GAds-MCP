@@ -1,19 +1,15 @@
 # AdLoop configuration
 # Copy this file to ~/.adloop/config.yaml and fill in your values.
 #
-# To get started, you need:
-#   1. A Google Cloud project with Analytics + Ads APIs enabled
-#   2. OAuth 2.0 Desktop credentials (download JSON → credentials.json)
-#   3. A Google Ads developer token (MCC → Tools → API Center)
+# Most users only need to set: developer_token, customer_id, login_customer_id.
+# The setup wizard (adloop init) handles everything automatically.
 #
 # See README.md for detailed setup instructions.
 
 google:
-  # Your Google Cloud project ID.
-  project_id: ""
-
-  # Path to your OAuth client JSON file (Desktop app type) or service account key.
-  credentials_path: "~/.adloop/credentials.json"
+  # Leave credentials_path empty to use AdLoop's built-in OAuth credentials.
+  # Only set this if you're using your own Google Cloud project or a service account.
+  # credentials_path: "~/.adloop/credentials.json"
 
   # OAuth token is stored here automatically after first login.
   # You shouldn't need to touch this.
@@ -22,6 +18,7 @@ google:
 ga4:
   # Your GA4 property ID (numeric).
   # Find it in GA4 → Admin → Property Settings.
+  # The setup wizard auto-discovers this after OAuth.
   property_id: ""
 
 ads:
@@ -33,14 +30,38 @@ ads:
 
   # Default Google Ads customer ID (e.g. "123-456-7890").
   # This is the account you want to manage, not the MCC.
+  # The setup wizard auto-discovers this after OAuth.
   customer_id: ""
 
   # Your MCC (Manager) account ID (e.g. "123-456-7890").
   # Required for API access — even if you only manage one account.
   login_customer_id: ""
 
+gsc:
+  # Your Google Search Console site URL.
+  # Use the exact URL shown in the GSC property selector, e.g.:
+  #   "https://example.com/"         (URL-prefix property)
+  #   "sc-domain:example.com"        (Domain property)
+  # Leave empty to pass site_url as a parameter in each tool call instead.
+  site_url: ""
+
+gtm:
+  # Default Google Tag Manager account + container for the GTM tools.
+  # Find both via list_gtm_accounts / list_gtm_containers, or in the GTM UI
+  # under Admin -> Container Settings. Leave empty to pass
+  # gtm_account_id / gtm_container_id as parameters in each call instead.
+  account_id: ""
+  container_id: ""
+
+pagespeed:
+  # Optional Google API key for PageSpeed Insights (analyze_page_speed).
+  # Works without one at very low rates; create a key in your GCP project
+  # (APIs & Services -> Credentials) and enable "PageSpeed Insights API"
+  # for a stable quota. No OAuth involved.
+  api_key: ""
+
 safety:
-  # Maximum daily budget allowed per campaign (EUR).
+  # Maximum daily budget allowed per campaign (in your account's currency).
   # AdLoop will reject any campaign creation or budget change above this.
   max_daily_budget: 50.00
 
@@ -50,6 +71,11 @@ safety:
   # Force all write operations to dry-run mode.
   # Set to false only when you're ready to make real changes.
   require_dry_run: true
+
+  # Two-phase apply: confirm_and_apply refuses dry_run=false for any plan
+  # that has not completed a dry-run pass first. Enforces the order
+  # (preview, then apply) without blocking real writes entirely.
+  two_phase_apply: false
 
   # Path to the audit log file. All operations are logged here.
   log_file: "~/.adloop/audit.log"

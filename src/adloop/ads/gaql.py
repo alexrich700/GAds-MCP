@@ -63,6 +63,16 @@ def run_gaql(
 # ---------------------------------------------------------------------------
 
 _GAQL_ERROR_HINTS = {
+    "DEVELOPER_TOKEN_NOT_APPROVED": (
+        "Your Google Ads developer token is only approved for test accounts. "
+        "Apply for Basic or Standard access in the Google Ads API Center, "
+        "or use a test account."
+    ),
+    "DEVELOPER_TOKEN_INVALID": (
+        "Your Google Ads developer token is invalid. Update "
+        "`ads.developer_token` in `~/.adloop/config.yaml` using the token "
+        "from your manager account API Center."
+    ),
     "EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE": (
         "Fields used in ORDER BY or HAVING must also appear in the SELECT clause. "
         "Add the missing field to your SELECT."
@@ -79,7 +89,29 @@ _GAQL_ERROR_HINTS = {
 
 
 def _parse_gaql_error(exc: Exception) -> str:
-    """Extract a human-readable message from Google Ads gRPC errors."""
+    """Extract a human-readable message from Google Ads gRPC errors.
+
+    Prefers the structured ``failure.errors[]`` a GoogleAdsException
+    carries — Google's own message names the exact field/clause at
+    fault (e.g. PROHIBITED_FIELD_IN_SELECT_CLAUSE with the field name),
+    which is far more actionable than a generic hint. Known error codes
+    still get the hint appended as a suffix.
+    """
+    failure = getattr(exc, "failure", None)
+    errors = getattr(failure, "errors", None) if failure is not None else None
+    if errors:
+        parts = []
+        for err in errors:
+            code = str(getattr(err, "error_code", "") or "").strip()
+            message = str(getattr(err, "message", "") or "").strip()
+            parts.append(" — ".join(p for p in (code, message) if p))
+        detail = " | ".join(p for p in parts if p)
+        if detail:
+            for known, hint in _GAQL_ERROR_HINTS.items():
+                if known in detail:
+                    return f"{detail} (hint: {hint})"
+            return detail
+
     raw = str(exc)
     for code, hint in _GAQL_ERROR_HINTS.items():
         if code in raw:
@@ -132,17 +164,32 @@ def _to_python(obj: object) -> object:
             # 0 / UNSPECIFIED means "not pinned".
             pin_name = getattr(pinned, "name", None)
             if pin_name is not None and pin_name != "UNSPECIFIED":
-                return {"text": obj.text, "pinned_to": pin_name}
+                return {"text": obj.text, "pinned_field": pin_name}
             if isinstance(pinned, int) and pinned != 0:
-                return {"text": obj.text, "pinned_to": str(pinned)}
+                return {"text": obj.text, "pinned_field": str(pinned)}
         return obj.text
+    # Nested proto-plus messages (targeting settings, criteria, ...) —
+    # serialize to a dict instead of collapsing to their str() repr.
+    try:
+        import proto
+
+        if isinstance(obj, proto.Message):
+            return type(obj).to_dict(
+                obj, preserving_proto_field_name=True, use_integers_for_enums=False
+            )
+    except ImportError:
+        pass
+    if hasattr(obj, "DESCRIPTOR"):
+        from google.protobuf.json_format import MessageToDict
+
+        return MessageToDict(obj, preserving_proto_field_name=True)
     return str(obj)
 
 
 def _format_asset_item(v: object) -> str:
     """Format a single list item, rendering pinned AdTextAsset dicts nicely."""
     if isinstance(v, dict) and "text" in v:
-        pinned = v.get("pinned_to")
+        pinned = v.get("pinned_field")
         return f"{v['text']} [{pinned}]" if pinned else v["text"]
     return str(v)
 

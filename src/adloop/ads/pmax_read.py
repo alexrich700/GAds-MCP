@@ -388,7 +388,7 @@ def _validate_numeric_id(value: str, name: str) -> str:
 
 
 def _enrich_cost_fields(rows: list[dict]) -> None:
-    """Add metrics.cost (EUR) and metrics.cpa from cost_micros."""
+    """Add metrics.cost and metrics.cpa (account currency) from cost_micros."""
     for row in rows:
         cost_micros = row.get("metrics.cost_micros", 0) or 0
         row["metrics.cost"] = round(cost_micros / 1_000_000, 2)
@@ -399,7 +399,7 @@ def _enrich_cost_fields(rows: list[dict]) -> None:
 
         avg_cpc_micros = row.get("metrics.average_cpc", 0) or 0
         if avg_cpc_micros:
-            row["metrics.average_cpc_eur"] = round(avg_cpc_micros / 1_000_000, 2)
+            row["metrics.average_cpc_amount"] = round(avg_cpc_micros / 1_000_000, 2)
 
 
 def _enrich_budget_fields(rows: list[dict]) -> None:
