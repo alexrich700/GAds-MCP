@@ -50,14 +50,14 @@ def sync_rules() -> str:
     if not CURSOR_RULES.exists():
         raise FileNotFoundError(f"Canonical rules not found: {CURSOR_RULES}")
 
-    body = extract_body(CURSOR_RULES.read_text())
+    body = extract_body(CURSOR_RULES.read_text(encoding="utf-8"))
     rendered = CLAUDE_FRONTMATTER + "\n" + body
 
     CLAUDE_RULES.parent.mkdir(parents=True, exist_ok=True)
-    CLAUDE_RULES.write_text(rendered)
+    CLAUDE_RULES.write_text(rendered, encoding="utf-8")
 
     PACKAGE_RULES_DIR.mkdir(parents=True, exist_ok=True)
-    PACKAGE_RULES.write_text(rendered)
+    PACKAGE_RULES.write_text(rendered, encoding="utf-8")
 
     return rendered
 

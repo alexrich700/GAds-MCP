@@ -185,8 +185,8 @@ class TestInstallLazy:
         # Should match the bundled rules content (frontmatter intact —
         # this is a Claude rules file, not a CLAUDE.md).
         bundled = rules_install._read_bundled_rules()
-        assert rules_file.read_text() == bundled
-        assert rules_file.read_text().startswith("---")
+        assert rules_file.read_text(encoding="utf-8") == bundled
+        assert rules_file.read_text(encoding="utf-8").startswith("---")
 
 
 # ---------------------------------------------------------------------------

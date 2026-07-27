@@ -187,7 +187,7 @@ def _read_bundled_rules() -> str:
     """
     ref = importlib.resources.files("adloop.rules").joinpath("adloop.md")
     with importlib.resources.as_file(ref) as p:
-        return Path(p).read_text()
+        return Path(p).read_text(encoding="utf-8")
 
 
 def _read_bundled_rules_body() -> str:
@@ -216,7 +216,7 @@ def _list_bundled_commands() -> list[tuple[str, str]]:
         if not cmd_dir.is_dir():
             return commands
         for md in sorted(cmd_dir.glob("*.md")):
-            commands.append((md.name, md.read_text()))
+            commands.append((md.name, md.read_text(encoding="utf-8")))
     return commands
 
 
@@ -326,13 +326,13 @@ def uninstall_rules(
 
         # Remove sentinel block from CLAUDE.md
         if client.rules_target.exists():
-            existing = client.rules_target.read_text()
+            existing = client.rules_target.read_text(encoding="utf-8")
             cleaned = _strip_block(existing)
             if cleaned != existing:
                 if cleaned.strip() == "":
                     client.rules_target.unlink()
                 else:
-                    client.rules_target.write_text(cleaned)
+                    client.rules_target.write_text(cleaned, encoding="utf-8")
                 result.action = "uninstalled"
 
         # Remove the lazy-mode rules file if present
@@ -385,7 +385,7 @@ def _apply_to_clients(
         rules_target = client.rules_target
         rules_target.parent.mkdir(parents=True, exist_ok=True)
 
-        existing = rules_target.read_text() if rules_target.exists() else ""
+        existing = rules_target.read_text(encoding="utf-8") if rules_target.exists() else ""
         had_block = bool(_SENTINEL_BLOCK_RE.search(existing))
 
         # Resolve mode: explicit > existing-mode-detection > inline default.
@@ -401,11 +401,11 @@ def _apply_to_clients(
         if resolved_mode == "lazy":
             lazy_rules_dir = rules_target.parent / "rules"
             lazy_rules_dir.mkdir(parents=True, exist_ok=True)
-            (lazy_rules_dir / "adloop.md").write_text(_read_bundled_rules())
+            (lazy_rules_dir / "adloop.md").write_text(_read_bundled_rules(), encoding="utf-8")
 
         new_block = _build_managed_block(resolved_mode, rules_target)
         merged = _replace_or_append_block(existing, new_block)
-        rules_target.write_text(merged)
+        rules_target.write_text(merged, encoding="utf-8")
 
         result = InstallResult(
             client=client.name,
@@ -418,7 +418,7 @@ def _apply_to_clients(
             client.commands_dir.mkdir(parents=True, exist_ok=True)
             for filename, content in _list_bundled_commands():
                 target = client.commands_dir / f"adloop-{filename}"
-                target.write_text(content)
+                target.write_text(content, encoding="utf-8")
                 result.commands_installed.append(target.name)
 
         results.append(result)

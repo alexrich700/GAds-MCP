@@ -1,5 +1,5 @@
 ---
-description: AdLoop MCP orchestration � Google Ads + GA4 + codebase intelligence
+description: AdLoop MCP orchestration — Google Ads + GA4 + codebase intelligence
 ---
 
 # AdLoop — AI Orchestration Rules
