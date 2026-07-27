@@ -2997,6 +2997,12 @@ def _apply_create_campaign(client: object, cid: str, changes: dict) -> dict:
         client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
     )
 
+    # Final URL suffix (UTM tracking) — auto-set for SEARCH by draft_campaign;
+    # an empty string means the caller explicitly disabled it, so only apply
+    # when non-empty.
+    if changes.get("final_url_suffix"):
+        campaign.final_url_suffix = changes["final_url_suffix"]
+
     operations.append(campaign_op)
 
     # 3. AdGroup (temp ID: -3, references campaign -2)
@@ -3135,6 +3141,7 @@ def _apply_update_campaign(client: object, cid: str, changes: dict) -> dict:
         or search_partners_enabled is not None
         or display_network_enabled is not None
         or changes.get("max_cpc")
+        or changes.get("final_url_suffix") is not None
     ):
         campaign_op = client.get_type("MutateOperation")
         campaign = campaign_op.campaign_operation.update
@@ -3181,6 +3188,12 @@ def _apply_update_campaign(client: object, cid: str, changes: dict) -> dict:
         if display_network_enabled is not None:
             campaign.network_settings.target_content_network = display_network_enabled
             field_paths.append("network_settings.target_content_network")
+
+        # Final URL suffix (UTM) — empty string clears it; None = no change.
+        new_suffix = changes.get("final_url_suffix")
+        if new_suffix is not None:
+            campaign.final_url_suffix = new_suffix
+            field_paths.append("final_url_suffix")
 
         if field_paths:
             campaign_op.campaign_operation.update_mask.CopyFrom(
