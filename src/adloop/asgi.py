@@ -85,10 +85,13 @@ def _prepare_server():
     from adloop.hosting.auth import install_auth
     from adloop.hosting.credentials import install_credentials_provider
     from adloop.hosting.datastore import install_datastore
+    from adloop.hosting.token_lookup import build_supabase_token_lookup
     from adloop.server import mcp
 
     install_auth(mcp)  # Supabase auth + tenant middleware (if configured)
-    install_credentials_provider()  # per-user Google creds provider
+    # Per-user Google creds. With a DB configured, the real Supabase token
+    # lookup (Phase E) is used; otherwise it falls back to the env-var dev token.
+    install_credentials_provider(build_supabase_token_lookup())
     install_datastore()  # Supabase-backed plan store + audit sink (if configured)
     return mcp
 
