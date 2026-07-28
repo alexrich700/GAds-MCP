@@ -1,0 +1,17 @@
+# Keep the build context small + never ship secrets or local state.
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.git/
+.github/
+tests/
+migrations/
+.env
+.env.*
+*.log
+.claude/
+.vscode/
+.idea/
