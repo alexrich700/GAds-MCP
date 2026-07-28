@@ -1,0 +1,21 @@
+# Upload rules for `gcloud run deploy --source` (Cloud Build context).
+#
+# WITHOUT this file gcloud falls back to .gitignore — which lists `uv.lock`
+# (line 18), so the lockfile would be excluded and the Dockerfile's
+# `COPY ... uv.lock ...` fails. This file overrides that: it excludes only the
+# heavy/irrelevant stuff and keeps everything the image build needs
+# (pyproject.toml, uv.lock, README.md, src/).
+
+.git/
+.github/
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.claude/
+.vscode/
+.idea/
+*.log
+node_modules/

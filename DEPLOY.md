@@ -25,32 +25,35 @@ gcloud services enable \
 
 ## 1. Create the secrets (Secret Manager)
 
-Only the genuinely secret values go here; plain config is passed as env in step 3.
-Create each from a local value **without echoing it into shell history** where
-possible (`--data-file=-` reads stdin):
+Only the genuinely secret values go here; plain config is passed as env in step 2.
+Create these three secrets:
+
+| Secret name | Value |
+|---|---|
+| `adloop-database-url` | IPv4 shared-pooler string (see § env reference), real password substituted, special chars percent-encoded |
+| `adloop-google-client-secret` | Web OAuth client secret (from client `adloop-hosted-web`) |
+| `adloop-ads-developer-token` | Google Ads developer token |
+
+**Recommended: create them in the Console** — GCP Console → Security → Secret
+Manager → Create Secret → paste the value → Create. It keeps secrets out of shell
+history and avoids the trailing-newline trap below.
+
+⚠️ **No trailing newline/space.** Cloud Run injects the value verbatim, so a stray
+`\n` corrupts the connection string / token. The Console textarea is safe if you
+paste cleanly; `echo`/`printf` piping is not (PowerShell's `echo` appends a
+newline — use `--data-file=-` from a temp file written without one if you must
+use the CLI).
+
+Grant the Cloud Run runtime service account `secretAccessor` on each secret. This
+**must happen before the deploy** — otherwise the revision fails to start with a
+"Permission denied on secret" error. The default runtime SA is
+`PROJECT_NUMBER-compute@developer.gserviceaccount.com` (here PROJECT_NUMBER is
+`955371824855`):
 
 ```bash
-# Supabase transaction-pooler URL — MUST be the IPv4 shared-pooler string
-#   postgresql://postgres.<ref>:<PASSWORD>@aws-1-us-west-1.pooler.supabase.com:6543/postgres
-# (percent-encode special chars in the password)
-printf '%s' 'PASTE_ADLOOP_DATABASE_URL' | gcloud secrets create adloop-database-url --data-file=-
-
-# Google Web OAuth client secret (from client adloop-hosted-web)
-printf '%s' 'PASTE_GOOGLE_CLIENT_SECRET' | gcloud secrets create adloop-google-client-secret --data-file=-
-
-# Google Ads developer token
-printf '%s' 'PASTE_ADS_DEVELOPER_TOKEN' | gcloud secrets create adloop-ads-dev-token --data-file=-
-```
-
-Grant the Cloud Run runtime service account read access to each secret (replace
-`PROJECT_NUMBER`; the default runtime SA is `PROJECT_NUMBER-compute@developer.gserviceaccount.com`):
-
-```bash
-for S in adloop-database-url adloop-google-client-secret adloop-ads-dev-token; do
-  gcloud secrets add-iam-policy-binding "$S" \
-    --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-    --role="roles/secretmanager.secretAccessor"
-done
+gcloud secrets add-iam-policy-binding adloop-database-url          --member="serviceAccount:955371824855-compute@developer.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
+gcloud secrets add-iam-policy-binding adloop-google-client-secret  --member="serviceAccount:955371824855-compute@developer.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
+gcloud secrets add-iam-policy-binding adloop-ads-developer-token   --member="serviceAccount:955371824855-compute@developer.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
 ```
 
 ## 2. First deploy (to obtain the service URL)
@@ -64,26 +67,24 @@ Google identity.
 here. `ADLOOP_BASE_URL` / allow-lists / `ADLOOP_EXPECTED_CLIENT_ID` are set in
 step 4 once we know the URL + connector id.
 
+Pass all env vars in ONE quoted `--set-env-vars`, and all secrets in ONE quoted
+`--set-secrets`. **Repeating a `--set-*` flag does NOT accumulate — gcloud keeps
+only the last occurrence**, so the multi-flag form silently drops values. The
+double quotes are also required in PowerShell, which otherwise splits the
+comma-separated value into separate arguments.
+
 ```bash
-gcloud run deploy adloop-hosted \
-  --source . \
-  --region us-west1 \
-  --allow-unauthenticated \
-  --set-env-vars ADLOOP_SUPABASE_URL=https://lkqinhtagvvzxhaxxsgq.supabase.co \
-  --set-env-vars ADLOOP_JWT_ALGORITHM=ES256 \
-  --set-env-vars ADLOOP_GOOGLE_CLIENT_ID=955371824855-h0dpakb837g2egl2ehq8haeedjjnhs5k.apps.googleusercontent.com \
-  --set-env-vars ADLOOP_ADS_LOGIN_CUSTOMER_ID=4762726066 \
-  --set-secrets ADLOOP_DATABASE_URL=adloop-database-url:latest \
-  --set-secrets ADLOOP_GOOGLE_CLIENT_SECRET=adloop-google-client-secret:latest \
-  --set-secrets ADLOOP_ADS_DEVELOPER_TOKEN=adloop-ads-dev-token:latest
+gcloud run deploy adloop-hosted --source . --region us-west1 --allow-unauthenticated --set-env-vars "ADLOOP_SUPABASE_URL=https://lkqinhtagvvzxhaxxsgq.supabase.co,ADLOOP_JWT_ALGORITHM=ES256,ADLOOP_GOOGLE_CLIENT_ID=955371824855-h0dpakb837g2egl2ehq8haeedjjnhs5k.apps.googleusercontent.com,ADLOOP_ADS_LOGIN_CUSTOMER_ID=4762726066" --set-secrets "ADLOOP_GOOGLE_CLIENT_SECRET=adloop-google-client-secret:latest,ADLOOP_ADS_DEVELOPER_TOKEN=adloop-ads-developer-token:latest"
 ```
 
-> Note: each env var is passed as its own `--set-env-vars` flag on purpose — a
-> single comma-joined list would break on any value containing a comma. If you
-> ever need to override the comma-valued `ADLOOP_TOOLSETS`, use `--env-vars-file`
-> (YAML) rather than `--set-env-vars`.
+> Add `ADLOOP_DATABASE_URL=adloop-database-url:latest` to `--set-secrets` once the
+> DB password is available. It's optional at boot — `install_datastore()` falls
+> back to an in-memory store if unset — so the first deploy can omit it (as above)
+> and a later `gcloud run services update` can add it. `ADLOOP_TOOLSETS=ads,ga4`
+> is baked into the image, so it's never passed here (a comma-valued env would
+> also need `--env-vars-file`).
 
-Grab the service URL it prints (e.g. `https://adloop-hosted-XXXX-uw.a.run.app`).
+Grab the service URL it prints (e.g. `https://adloop-hosted-XXXXXXXXXXXX.us-west1.run.app`).
 
 ## 3. Enable Supabase OAuth Server + register the connector
 
@@ -95,12 +96,16 @@ Blocked until the Supabase **Owner/Admin** access lands (Auth-settings write gat
 
 ## 4. Second deploy (pin base URL + connector id)
 
+Use `--update-env-vars` (merges) — NOT `--set-env-vars`, which would wipe the env
+vars set in step 2. One quoted, comma-joined value:
+
 ```bash
-gcloud run services update adloop-hosted --region us-west1 \
-  --set-env-vars ADLOOP_BASE_URL=https://adloop-hosted-XXXX-uw.a.run.app \
-  --set-env-vars ADLOOP_ALLOWED_HOSTS=adloop-hosted-XXXX-uw.a.run.app \
-  --set-env-vars ADLOOP_EXPECTED_CLIENT_ID=PASTE_CONNECTOR_CLIENT_ID
+gcloud run services update adloop-hosted --region us-west1 --update-env-vars "ADLOOP_BASE_URL=https://adloop-hosted-XXXXXXXXXXXX.us-west1.run.app,ADLOOP_ALLOWED_HOSTS=adloop-hosted-XXXXXXXXXXXX.us-west1.run.app,ADLOOP_EXPECTED_CLIENT_ID=PASTE_CONNECTOR_CLIENT_ID"
 ```
+
+In practice this is two updates: set `ADLOOP_BASE_URL` + `ADLOOP_ALLOWED_HOSTS`
+right after the first deploy (turns auth on), then add `ADLOOP_EXPECTED_CLIENT_ID`
+once the connector is registered and its client_id is known.
 
 Without `ADLOOP_BASE_URL` the server logs a warning and runs **unauthenticated**
 (see `install_auth`); without `ADLOOP_EXPECTED_CLIENT_ID` client-id pinning is OFF
