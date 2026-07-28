@@ -35,3 +35,5 @@ build-backend = "uv_build"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+# Hosted server mode (Cloud Run) — Supabase Postgres datastore (Phase D).
+hosting = ["psycopg[binary,pool]>=3.1"]

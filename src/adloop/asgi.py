@@ -84,10 +84,12 @@ def _prepare_server():
     _configure_server_runtime()
     from adloop.hosting.auth import install_auth
     from adloop.hosting.credentials import install_credentials_provider
+    from adloop.hosting.datastore import install_datastore
     from adloop.server import mcp
 
     install_auth(mcp)  # Supabase auth + tenant middleware (if configured)
     install_credentials_provider()  # per-user Google creds provider
+    install_datastore()  # Supabase-backed plan store + audit sink (if configured)
     return mcp
 
 
