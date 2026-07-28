@@ -25,8 +25,9 @@ WORKDIR /app
 # README.md is required because pyproject's `readme = "README.md"` is read at build.
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --extra hosting --no-dev --frozen
+# No BuildKit cache mount: Cloud Build's `--source` builds use the classic
+# docker builder, which rejects `RUN --mount=...`. A plain RUN is portable.
+RUN uv sync --extra hosting --no-dev --frozen
 
 ENV PATH="/app/.venv/bin:$PATH"
 
