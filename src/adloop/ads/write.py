@@ -2031,14 +2031,41 @@ def confirm_and_apply(
     to make real changes.
     """
     from adloop.safety.audit import log_mutation
-    from adloop.safety.preview import get_plan, remove_plan, store_plan
+    from adloop.safety.preview import (
+        get_plan,
+        plan_is_expired,
+        prune_expired_plans,
+        remove_plan,
+        store_plan,
+    )
+
+    max_age = config.safety.plan_max_age_minutes
 
     plan = get_plan(plan_id)
     if plan is None:
         return {
             "error": f"No pending plan found with id '{plan_id}'. "
-            "Plans expire when the MCP server restarts.",
+            f"Pending plans expire {max_age} minutes after being drafted; "
+            "re-draft the change to get a fresh plan_id.",
         }
+
+    if plan_is_expired(plan, max_age):
+        # A stale approval must never apply — the persistent store means an
+        # abandoned plan would otherwise survive for days. Drop it and force a
+        # fresh draft.
+        remove_plan(plan_id)
+        return {
+            "status": "PLAN_EXPIRED",
+            "plan_id": plan_id,
+            "error": (
+                f"Plan '{plan_id}' has expired — plans must be applied within "
+                f"{max_age} minutes of being drafted. Re-draft the change to "
+                "get a fresh plan_id."
+            ),
+        }
+
+    # Opportunistically reap this tenant's other stale plans.
+    prune_expired_plans(max_age)
 
     forced_by_config = bool(config.safety.require_dry_run) and not dry_run
     if config.safety.require_dry_run:

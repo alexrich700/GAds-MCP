@@ -77,6 +77,12 @@ safety:
   # (preview, then apply) without blocking real writes entirely.
   two_phase_apply: false
 
+  # Maximum age (minutes) of a pending plan before confirm_and_apply refuses
+  # it. The hosted plan store survives server restarts, so this keeps a stale
+  # approval from applying a budget/status change long after it was drafted.
+  # Set to 0 to disable the age check.
+  plan_max_age_minutes: 60
+
   # Path to the audit log file. All operations are logged here.
   log_file: "~/.adloop/audit.log"
 

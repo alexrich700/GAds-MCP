@@ -157,6 +157,24 @@ class SupabasePlanStore:
                 (tenant, plan_id),
             )
 
+    def prune_expired(self, tenant: str, max_age_minutes: float) -> int:
+        # The store now survives Cloud Run restarts, so nothing else reaps
+        # abandoned plans — this opportunistic delete keeps stale rows from
+        # accumulating (and, together with the apply-time age check, keeps an
+        # old approval from ever executing).
+        if not max_age_minutes or max_age_minutes <= 0:
+            return 0
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        with self._connect() as conn:
+            cur = conn.execute(
+                "delete from gads.change_plans "
+                "where tenant = %s and created_at < %s::timestamptz",
+                (tenant, cutoff.isoformat()),
+            )
+        return getattr(cur, "rowcount", 0) or 0
+
 
 class SupabaseAuditSink:
     """Append-only ``AuditSink`` backed by ``gads.mutation_audit``.

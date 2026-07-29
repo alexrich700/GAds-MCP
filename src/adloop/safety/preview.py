@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 
@@ -41,6 +41,34 @@ class ChangePlan:
         }
 
 
+def _parse_created_at(created_at: str) -> datetime | None:
+    """Parse a plan's ISO ``created_at`` into a tz-aware datetime, or None if
+    it cannot be parsed."""
+    try:
+        parsed = datetime.fromisoformat(created_at)
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def plan_is_expired(
+    plan: ChangePlan, max_age_minutes: float, *, now: datetime | None = None
+) -> bool:
+    """True if ``plan`` is older than ``max_age_minutes``.
+
+    ``max_age_minutes <= 0`` disables the check. An unparseable ``created_at``
+    fails closed (treated as expired): a plan we cannot date is not safe to
+    apply.
+    """
+    if not max_age_minutes or max_age_minutes <= 0:
+        return False
+    created = _parse_created_at(plan.created_at)
+    if created is None:
+        return True
+    now = now or datetime.now(timezone.utc)
+    return (now - created) > timedelta(minutes=max_age_minutes)
+
+
 class PlanStore(Protocol):
     """Storage for pending plans between draft and confirm_and_apply.
 
@@ -59,6 +87,11 @@ class PlanStore(Protocol):
     def get(self, tenant: str, plan_id: str) -> ChangePlan | None: ...
 
     def remove(self, tenant: str, plan_id: str) -> None: ...
+
+    def prune_expired(self, tenant: str, max_age_minutes: float) -> int:
+        """Delete the tenant's plans older than ``max_age_minutes`` and return
+        how many were removed. A no-op when ``max_age_minutes <= 0``."""
+        ...
 
 
 class InMemoryPlanStore:
@@ -79,6 +112,20 @@ class InMemoryPlanStore:
     def remove(self, tenant: str, plan_id: str) -> None:
         with self._lock:
             self._plans.pop((tenant, plan_id), None)
+
+    def prune_expired(self, tenant: str, max_age_minutes: float) -> int:
+        if not max_age_minutes or max_age_minutes <= 0:
+            return 0
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            stale = [
+                key
+                for key, plan in self._plans.items()
+                if key[0] == tenant and plan_is_expired(plan, max_age_minutes, now=now)
+            ]
+            for key in stale:
+                del self._plans[key]
+        return len(stale)
 
 
 _active_store: PlanStore = InMemoryPlanStore()
@@ -113,3 +160,10 @@ def remove_plan(plan_id: str) -> None:
     from adloop.runtime import current_tenant
 
     _active_store.remove(current_tenant(), plan_id)
+
+
+def prune_expired_plans(max_age_minutes: float) -> int:
+    """Drop the current tenant's plans older than ``max_age_minutes``."""
+    from adloop.runtime import current_tenant
+
+    return _active_store.prune_expired(current_tenant(), max_age_minutes)

@@ -2026,6 +2026,78 @@ class TestTwoPhaseApply:
         assert result["dry_run_forced_by"] == "config.safety.require_dry_run"
 
 
+class TestPlanExpiry:
+    """A stale approval must never apply. The persistent (Postgres-backed)
+    plan store survives restarts, so confirm_and_apply enforces a max plan age
+    on retrieval and prunes other expired rows."""
+
+    def _config(self, tmp_path, *, max_age: int = 60) -> AdLoopConfig:
+        return AdLoopConfig(
+            ads=AdsConfig(customer_id="123-456-7890"),
+            safety=SafetyConfig(
+                require_dry_run=False,
+                two_phase_apply=False,
+                plan_max_age_minutes=max_age,
+                log_file=str(tmp_path / "audit.log"),
+            ),
+            source_path=str(tmp_path / "config.yaml"),
+        )
+
+    def _stage_plan(self, *, created_at: str | None = None) -> str:
+        kwargs = {
+            "operation": "add_keywords",
+            "entity_type": "keyword",
+            "customer_id": "123-456-7890",
+            "changes": {"ad_group_id": "2002", "keywords": []},
+        }
+        if created_at is not None:
+            kwargs["created_at"] = created_at
+        plan = preview_store.ChangePlan(**kwargs)
+        preview_store.store_plan(plan)
+        return plan.plan_id
+
+    def test_expired_plan_is_refused_and_dropped(self, tmp_path, monkeypatch):
+        config = self._config(tmp_path)
+        plan_id = self._stage_plan(created_at="2020-01-01T00:00:00+00:00")
+        monkeypatch.setattr(write, "_execute_plan", lambda *_: {"resource_name": "no"})
+
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "PLAN_EXPIRED"
+        assert result["plan_id"] == plan_id
+        # The stale plan is gone, so it can never be re-applied.
+        assert preview_store.get_plan(plan_id) is None
+
+    def test_fresh_plan_still_applies(self, tmp_path, monkeypatch):
+        config = self._config(tmp_path)
+        plan_id = self._stage_plan()
+        monkeypatch.setattr(write, "_execute_plan", lambda *_: {"resource_name": "ok"})
+
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "APPLIED"
+
+    def test_age_check_disabled_lets_old_plan_apply(self, tmp_path, monkeypatch):
+        config = self._config(tmp_path, max_age=0)
+        plan_id = self._stage_plan(created_at="2020-01-01T00:00:00+00:00")
+        monkeypatch.setattr(write, "_execute_plan", lambda *_: {"resource_name": "ok"})
+
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "APPLIED"
+
+    def test_apply_prunes_other_stale_plans(self, tmp_path, monkeypatch):
+        config = self._config(tmp_path)
+        stale_id = self._stage_plan(created_at="2020-01-01T00:00:00+00:00")
+        fresh_id = self._stage_plan()
+        monkeypatch.setattr(write, "_execute_plan", lambda *_: {"resource_name": "ok"})
+
+        write.confirm_and_apply(config, plan_id=fresh_id, dry_run=False)
+
+        # Applying the fresh plan reaped the abandoned stale one as a side effect.
+        assert preview_store.get_plan(stale_id) is None
+
+
 # ---------------------------------------------------------------------------
 # RSA pinning — _normalize_rsa_assets + _validate_rsa
 # ---------------------------------------------------------------------------
