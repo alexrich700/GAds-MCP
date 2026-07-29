@@ -119,13 +119,21 @@ class SupabasePlanStore:
             )
 
     def get(self, tenant: str, plan_id: str) -> ChangePlan | None:
+        # Expired plans are treated as absent, so a stale dry-run-approved plan
+        # can't be confirmed long after it was drafted (e.g. after the user
+        # disconnected + reconnected). TTL is env-tunable (default 24h).
+        try:
+            ttl_hours = max(1, int(os.environ.get("ADLOOP_PLAN_TTL_HOURS", "24")))
+        except ValueError:
+            ttl_hours = 24
         sql = f"""
             select {", ".join(_PLAN_COLUMNS)}
             from gads.change_plans
             where tenant = %s and plan_id = %s
+              and created_at > now() - make_interval(hours => %s)
         """
         with self._connect() as conn:
-            row = conn.execute(sql, (tenant, plan_id)).fetchone()
+            row = conn.execute(sql, (tenant, plan_id, ttl_hours)).fetchone()
         if row is None:
             return None
         return ChangePlan(
