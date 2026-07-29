@@ -32,8 +32,9 @@ _INSERT_TO_ROW = (
 
 
 class _FakeCursor:
-    def __init__(self, row):
+    def __init__(self, row, rowcount=0):
         self._row = row
+        self.rowcount = rowcount
 
     def fetchone(self):
         return self._row
@@ -61,6 +62,17 @@ class _FakeDB:
             return _FakeCursor(None)
         if s.startswith("select") and "from gads.change_plans" in s:
             return _FakeCursor(self.plans.get((params[0], params[1])))
+        if s.startswith("delete from gads.change_plans") and "created_at <" in s:
+            # prune_expired: delete this tenant's rows created before a cutoff.
+            tenant, cutoff = params[0], params[1]
+            stale = [
+                key
+                for key, row in self.plans.items()
+                if key[0] == tenant and str(row["created_at"]) < cutoff
+            ]
+            for key in stale:
+                del self.plans[key]
+            return _FakeCursor(None, rowcount=len(stale))
         if s.startswith("delete from gads.change_plans"):
             self.plans.pop((params[0], params[1]), None)
             return _FakeCursor(None)
@@ -114,6 +126,25 @@ def test_plan_remove():
     store.store("t", ChangePlan(plan_id="p"))
     store.remove("t", "p")
     assert store.get("t", "p") is None
+
+
+def test_prune_expired_drops_only_stale_rows():
+    db = _FakeDB()
+    store = SupabasePlanStore(db.connect)
+    store.store("t", ChangePlan(plan_id="old", created_at="2020-01-01T00:00:00+00:00"))
+    store.store("t", ChangePlan(plan_id="fresh"))  # created_at defaults to now
+    removed = store.prune_expired("t", 60)
+    assert removed == 1
+    assert store.get("t", "old") is None
+    assert store.get("t", "fresh") is not None
+
+
+def test_prune_expired_is_a_noop_when_disabled():
+    db = _FakeDB()
+    store = SupabasePlanStore(db.connect)
+    store.store("t", ChangePlan(plan_id="old", created_at="2020-01-01T00:00:00+00:00"))
+    assert store.prune_expired("t", 0) == 0
+    assert store.get("t", "old") is not None
 
 
 def test_audit_record_writes_row():

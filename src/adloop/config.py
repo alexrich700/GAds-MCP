@@ -58,6 +58,12 @@ class SafetyConfig:
     # (which blocks real writes entirely), this only enforces the order:
     # preview first, apply second.
     two_phase_apply: bool = False
+    # Max age of a pending plan before confirm_and_apply refuses it. The
+    # server's plan store now survives restarts (it's Postgres-backed), so an
+    # unbounded plan could apply a budget/status change days after it was
+    # drafted and approved. A short ceiling makes stale approvals fail closed.
+    # Set <= 0 to disable the age check (local dev).
+    plan_max_age_minutes: int = 60
     log_file: str = "~/.adloop/audit.log"
     blocked_operations: list[str] = field(default_factory=list)
 
@@ -139,6 +145,7 @@ def load_config(config_path: str | None = None) -> AdLoopConfig:
             max_bid_increase_pct=safety_raw.get("max_bid_increase_pct", 100),
             require_dry_run=safety_raw.get("require_dry_run", True),
             two_phase_apply=safety_raw.get("two_phase_apply", False),
+            plan_max_age_minutes=safety_raw.get("plan_max_age_minutes", 60),
             log_file=safety_raw.get("log_file", "~/.adloop/audit.log"),
             blocked_operations=safety_raw.get("blocked_operations", []),
         ),
