@@ -9,7 +9,7 @@ Env (placeholders until the Phase-0 admin items land):
   ADLOOP_SUPABASE_URL        Supabase project URL, e.g. https://<ref>.supabase.co
   ADLOOP_BASE_URL            this server's public URL (its OAuth resource id)
   ADLOOP_JWT_ALGORITHM       "ES256" (default) or "RS256"
-  ADLOOP_EXPECTED_CLIENT_ID  connector client_id to pin (fail-closed)
+  ADLOOP_EXPECTED_CLIENT_ID  connector client_id(s) to pin, comma-separated (fail-closed)
 
 Everything is env-gated: if Supabase isn't configured the builders return
 None so the transport still boots for local dev (unauthenticated — never
@@ -52,29 +52,36 @@ def build_supabase_auth() -> Any | None:
     )
 
 
-def expected_client_id() -> str | None:
-    """The connector client_id to pin, or None if pinning isn't configured."""
-    return os.environ.get("ADLOOP_EXPECTED_CLIENT_ID", "").strip() or None
+def expected_client_ids() -> frozenset[str]:
+    """Connector client_id(s) to accept, parsed from comma-separated
+    ``ADLOOP_EXPECTED_CLIENT_ID``. Empty set means pinning is off.
+
+    Accepting a list lets a cutover add the new connector's id alongside the
+    current one (append, don't swap), so re-pinning never leaves a window where
+    a live connector is rejected.
+    """
+    raw = os.environ.get("ADLOOP_EXPECTED_CLIENT_ID", "")
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
 
 
-def resolve_tenant(token: Any, expected: str | None) -> str:
-    """Enforce the pinned client_id and return the tenant id from a verified token.
+def resolve_tenant(token: Any, expected: "frozenset[str] | None") -> str:
+    """Enforce the pinned client_id(s) and return the tenant id from a verified token.
 
     Pure/decoupled from FastMCP request plumbing so it can be unit-tested.
 
     * ``token`` is the verified ``AccessToken`` (or None if unauthenticated).
-    * ``expected`` is the connector client_id to require, or None to skip
-      pinning (dev only).
+    * ``expected`` is the set of connector client_ids to accept, or empty/None
+      to skip pinning (dev only).
 
     Raises :class:`ToolError` (fail-closed) on any problem. Supabase does not
     support RFC 8707 resource indicators, so a token minted for a *different*
-    connector would still verify against this server — the client_id pin is
+    connector would still verify against this server; the client_id pin is
     what stops it.
     """
     if token is None:
         raise ToolError("Unauthenticated: no verified access token on this request.")
 
-    if expected and getattr(token, "client_id", None) != expected:
+    if expected and getattr(token, "client_id", None) not in expected:
         raise ToolError("Access token was not issued for this connector.")
 
     tenant = getattr(token, "subject", None) or (getattr(token, "claims", None) or {}).get("sub")
@@ -92,8 +99,8 @@ class TenantContextMiddleware(Middleware):
     executes the tool inside ``use_runtime(config, tenant=user_id)``.
     """
 
-    def __init__(self, expected_client_id: str | None) -> None:
-        self._expected = expected_client_id
+    def __init__(self, expected_client_ids: "frozenset[str] | None") -> None:
+        self._expected = expected_client_ids
 
     async def on_call_tool(self, context, call_next):  # noqa: ANN001 - FastMCP types
         from fastmcp.server.dependencies import get_access_token
@@ -120,8 +127,9 @@ def install_auth(mcp) -> bool:  # noqa: ANN001 - FastMCP server
         return False
 
     mcp.auth = provider
-    mcp.add_middleware(TenantContextMiddleware(expected_client_id()))
-    if expected_client_id() is None:
+    pinned = expected_client_ids()
+    mcp.add_middleware(TenantContextMiddleware(pinned))
+    if not pinned:
         log.warning(
             "ADLOOP_EXPECTED_CLIENT_ID not set — connector client_id pinning is "
             "OFF. A token minted for another Supabase OAuth connector would be "
