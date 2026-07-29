@@ -90,6 +90,29 @@ def test_plan_round_trip():
     assert got.requires_double_confirm is True
 
 
+def test_get_enforces_plan_ttl(monkeypatch):
+    # get() must filter by plan age and pass the configured TTL, so a stale
+    # approved plan is never returned to confirm_and_apply.
+    monkeypatch.setenv("ADLOOP_PLAN_TTL_HOURS", "6")
+    captured = {}
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, sql, params=None):
+            captured["sql"] = sql
+            captured["params"] = params
+            return _FakeCursor(None)
+
+    SupabasePlanStore(lambda: _Conn()).get("tenant-A", "p1")
+    assert "make_interval" in captured["sql"]
+    assert captured["params"][-1] == 6
+
+
 def test_plan_scoped_by_tenant():
     db = _FakeDB()
     store = SupabasePlanStore(db.connect)
