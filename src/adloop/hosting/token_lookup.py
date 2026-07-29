@@ -46,6 +46,17 @@ log = logging.getLogger("adloop.hosting.token_lookup")
 # signature takes uuid, and Postgres coerces a well-formed uuid string.
 _RPC_SQL = "select gads.get_ads_refresh_token(%s) as refresh_token"
 
+# SQLSTATEs meaning the Phase E schema/RPC isn't provisioned yet (the ClientBrain
+# migration hasn't been applied to this project). Treat these as "not connected"
+# so the caller gets the guided MissingGoogleConnection rather than a raw DB
+# error. Permission ('42501') and connection errors are deliberately NOT
+# swallowed: those are real misconfiguration and must surface.
+_NOT_PROVISIONED_SQLSTATES = frozenset({
+    "42883",  # undefined_function (the RPC is missing)
+    "42P01",  # undefined_table
+    "3F000",  # invalid_schema_name (the gads schema is missing)
+})
+
 
 def _first_value(row: Any) -> Any:
     """Read the single selected column from a psycopg row (dict_row) or a tuple."""
@@ -63,8 +74,20 @@ class SupabaseTokenLookup:
         self._connect = connect
 
     def __call__(self, tenant_id: str) -> str | None:
-        with self._connect() as conn:
-            row = conn.execute(_RPC_SQL, (tenant_id,)).fetchone()
+        try:
+            with self._connect() as conn:
+                row = conn.execute(_RPC_SQL, (tenant_id,)).fetchone()
+        except Exception as exc:  # noqa: BLE001 - re-raised unless a known "not provisioned" state
+            sqlstate = getattr(exc, "sqlstate", None)
+            if sqlstate in _NOT_PROVISIONED_SQLSTATES:
+                log.warning(
+                    "gads.get_ads_refresh_token unavailable (sqlstate %s); treating "
+                    "the tenant as unconnected. Is the ClientBrain google-ads "
+                    "migration applied to this Supabase project?",
+                    sqlstate,
+                )
+                return None
+            raise
         token = _first_value(row)
         return token or None
 

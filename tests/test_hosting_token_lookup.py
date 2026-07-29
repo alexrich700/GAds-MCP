@@ -2,6 +2,8 @@
 
 from contextlib import contextmanager
 
+import pytest
+
 from adloop.hosting.credentials import SupabaseCredentialsProvider
 from adloop.hosting.token_lookup import (
     SupabaseTokenLookup,
@@ -80,3 +82,31 @@ def test_plugs_into_credentials_provider(monkeypatch):
     with use_runtime(AdLoopConfig(), tenant="user-xyz"):
         creds = prov.ads_credentials(AdLoopConfig())
     assert creds.refresh_token == "rt-for-user"
+
+
+class _RaisingDB:
+    """Connection whose execute() raises a DB error carrying a SQLSTATE."""
+
+    def __init__(self, sqlstate):
+        self._sqlstate = sqlstate
+
+    @contextmanager
+    def connect(self):
+        yield self
+
+    def execute(self, sql, params=None):
+        err = RuntimeError("db error")
+        err.sqlstate = self._sqlstate
+        raise err
+
+
+def test_lookup_returns_none_when_rpc_not_provisioned():
+    # Migration not applied yet -> undefined_function (42883) -> treat as unconnected
+    # so the caller gets the guided MissingGoogleConnection, not a raw DB error.
+    assert SupabaseTokenLookup(_RaisingDB("42883").connect)("u") is None
+
+
+def test_lookup_reraises_real_errors():
+    # A permission error (42501) is real misconfig and must surface, not be masked.
+    with pytest.raises(RuntimeError):
+        SupabaseTokenLookup(_RaisingDB("42501").connect)("u")
