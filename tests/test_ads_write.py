@@ -245,6 +245,118 @@ def test_draft_campaign_allows_target_spend_cpc_cap(config):
     assert result["changes"]["max_cpc"] == 1.75
 
 
+def test_draft_campaign_clamps_budget_over_cap_with_bold_warning():
+    config = AdLoopConfig(
+        ads=AdsConfig(customer_id="123-456-7890"),
+        safety=SafetyConfig(max_daily_budget=50.0),
+    )
+    result = write.draft_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_name="Big Launch",
+        daily_budget=500,
+        bidding_strategy="MAXIMIZE_CONVERSIONS",
+        geo_target_ids=["2840"],
+        language_ids=["1000"],
+    )
+
+    assert result.get("error") is None, result
+    assert result["status"] == "PENDING_CONFIRMATION"
+    # The plan carries the cap, so confirm_and_apply applies 50, not 500.
+    assert result["changes"]["daily_budget"] == 50.0
+    assert result["warnings"][0].startswith("**FYI")
+    assert "50.00" in result["warnings"][0]
+    assert "500.00" in result["warnings"][0]
+    assert result["budget_cap"] == {
+        "requested_daily_budget": 500,
+        "applied_daily_budget": 50.0,
+        "max_daily_budget": 50.0,
+    }
+
+
+def test_draft_campaign_clamp_feeds_downstream_checks():
+    """The 5x-target-CPA warning must be computed on the APPLIED budget,
+    otherwise a clamped plan could pass a check the real budget fails."""
+    config = AdLoopConfig(
+        ads=AdsConfig(customer_id="123-456-7890"),
+        safety=SafetyConfig(max_daily_budget=50.0),
+    )
+    result = write.draft_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_name="Big Launch",
+        daily_budget=500,           # 500 >= 5 * 40, but clamped 50 < 200
+        bidding_strategy="TARGET_CPA",
+        target_cpa=40,
+        geo_target_ids=["2840"],
+        language_ids=["1000"],
+    )
+
+    assert result.get("error") is None, result
+    assert result["changes"]["daily_budget"] == 50.0
+    assert any("5x" in w for w in result["warnings"]), result["warnings"]
+
+
+def test_draft_campaign_within_cap_has_no_cap_fields(config):
+    result = write.draft_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_name="Small Launch",
+        daily_budget=50,
+        bidding_strategy="MAXIMIZE_CONVERSIONS",
+        geo_target_ids=["2840"],
+        language_ids=["1000"],
+    )
+
+    assert result.get("error") is None, result
+    assert result["changes"]["daily_budget"] == 50
+    assert "budget_cap" not in result
+    assert not any(w.startswith("**FYI") for w in result.get("warnings", []))
+
+
+def test_draft_campaign_still_rejects_nonpositive_budget(config):
+    result = write.draft_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_name="Zero",
+        daily_budget=0,
+        bidding_strategy="MAXIMIZE_CONVERSIONS",
+        geo_target_ids=["2840"],
+        language_ids=["1000"],
+    )
+    assert result["error"] == "Validation failed"
+    assert any("daily_budget" in d for d in result["details"])
+
+
+def test_update_campaign_clamps_budget_over_cap(config):
+    result = write.update_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_id="9001",
+        daily_budget=999,
+    )
+
+    assert result.get("error") is None, result
+    assert result["operation"] == "update_campaign"
+    assert result["changes"]["daily_budget"] == 50.0
+    assert any(w.startswith("**FYI") for w in result["warnings"])
+    assert result["budget_cap"]["requested_daily_budget"] == 999
+    assert result["budget_cap"]["applied_daily_budget"] == 50.0
+
+
+def test_update_campaign_within_cap_untouched(config):
+    result = write.update_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_id="9001",
+        daily_budget=30,
+    )
+
+    assert result.get("error") is None, result
+    assert result["changes"]["daily_budget"] == 30
+    assert "budget_cap" not in result
+
+
 def test_draft_campaign_rejects_conflicting_display_flags(config):
     result = write.draft_campaign(
         config,
@@ -1884,10 +1996,11 @@ class TestConfirmAndApplyDryRunOverride:
         assert "config_path" not in result
         assert "remediation" not in result
 
-    def test_forced_dry_run_falls_back_when_source_path_missing(self, tmp_path):
-        """Defensive default: if load_config didn't capture a path (legacy
-        callers constructing AdLoopConfig directly), we still surface a
-        path-shaped hint rather than an empty string."""
+    def test_forced_dry_run_uses_hosted_wording_when_source_path_missing(self, tmp_path):
+        """No source_path means no config file behind this config: hosted /
+        server mode, or a caller that built AdLoopConfig directly. The old
+        fallback named ~/.adloop/config.yaml, which sent hosted users hunting
+        for a file that does not exist on their machine or on the server."""
         config = AdLoopConfig(
             ads=AdsConfig(customer_id="123-456-7890"),
             safety=SafetyConfig(
@@ -1900,8 +2013,13 @@ class TestConfirmAndApplyDryRunOverride:
 
         result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
 
-        assert result["config_path"] == "~/.adloop/config.yaml"
-        assert "~/.adloop/config.yaml" in result["remediation"]
+        assert result["status"] == "DRY_RUN_SUCCESS"
+        assert result["dry_run_forced_by"] == "config.safety.require_dry_run"
+        assert result["config_path"] is None
+        assert "~/.adloop" not in result["remediation"]
+        assert "~/.adloop" not in result["message"]
+        assert "ADLOOP_REQUIRE_DRY_RUN" in result["remediation"]
+        assert "server" in result["remediation"].lower()
 
     def test_forced_dry_run_is_audit_logged(self, tmp_path):
         """The audit log must still reflect that a dry run happened."""

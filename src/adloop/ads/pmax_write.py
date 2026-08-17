@@ -159,7 +159,7 @@ def draft_pmax_campaign(
     from adloop.safety.guards import (
         SafetyViolation,
         check_blocked_operation,
-        check_budget_cap,
+        clamp_budget_cap,
     )
     from adloop.safety.preview import ChangePlan, store_plan
 
@@ -167,6 +167,11 @@ def draft_pmax_campaign(
         check_blocked_operation("create_pmax_campaign", config.safety)
     except SafetyViolation as e:
         return {"error": str(e)}
+
+    # Over-cap budgets are clamped, not rejected (see clamp_budget_cap).
+    # Clamp before validation so downstream checks see the applied figure.
+    requested_daily_budget = daily_budget
+    daily_budget, budget_cap_warning = clamp_budget_cap(daily_budget, config.safety)
 
     errors, warnings = _validate_pmax_campaign(
         campaign_name=campaign_name,
@@ -181,10 +186,8 @@ def draft_pmax_campaign(
     if errors:
         return {"error": "Validation failed", "details": errors}
 
-    try:
-        check_budget_cap(daily_budget, config.safety)
-    except SafetyViolation as e:
-        return {"error": str(e)}
+    if budget_cap_warning:
+        warnings.insert(0, budget_cap_warning)
 
     plan = ChangePlan(
         operation="create_pmax_campaign",
@@ -207,6 +210,12 @@ def draft_pmax_campaign(
     preview = plan.to_preview()
     if warnings:
         preview["warnings"] = warnings
+    if budget_cap_warning:
+        preview["budget_cap"] = {
+            "requested_daily_budget": requested_daily_budget,
+            "applied_daily_budget": daily_budget,
+            "max_daily_budget": float(config.safety.max_daily_budget),
+        }
     return preview
 
 

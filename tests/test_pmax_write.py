@@ -167,8 +167,8 @@ class TestDraftPmaxCampaign:
         assert "error" in result
         assert any("geo_target_ids" in d for d in result["details"])
 
-    def test_rejects_budget_above_cap(self, config):
-        # Cap is 100 in fixture; 200 exceeds it
+    def test_clamps_budget_above_cap_with_bold_warning(self, config):
+        # Cap is 100 in fixture; 200 is clamped to 100, not rejected.
         result = draft_pmax_campaign(
             config,
             customer_id="1234567890",
@@ -180,7 +180,34 @@ class TestDraftPmaxCampaign:
             asset_group=_valid_asset_group(),
         )
 
-        assert "error" in result
+        assert "error" not in result
+        assert result["status"] == "PENDING_CONFIRMATION"
+        assert result["changes"]["daily_budget"] == 100.0
+        assert result["warnings"][0].startswith("**FYI")
+        assert "100.00" in result["warnings"][0]
+        assert "200.00" in result["warnings"][0]
+        assert result["budget_cap"] == {
+            "requested_daily_budget": 200.0,
+            "applied_daily_budget": 100.0,
+            "max_daily_budget": 100.0,
+        }
+
+    def test_budget_at_or_below_cap_has_no_cap_fields(self, config):
+        result = draft_pmax_campaign(
+            config,
+            customer_id="1234567890",
+            campaign_name="PMax Test",
+            daily_budget=100.0,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+            asset_group=_valid_asset_group(),
+        )
+
+        assert "error" not in result
+        assert result["changes"]["daily_budget"] == 100.0
+        assert "budget_cap" not in result
+        assert not any(w.startswith("**FYI") for w in result.get("warnings", []))
 
     def test_validates_text_char_limits(self, config):
         bad = _valid_asset_group()

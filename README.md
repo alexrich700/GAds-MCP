@@ -418,9 +418,9 @@ All configuration lives in `~/.adloop/config.yaml`. See [`config.yaml.example`](
 | `ads` | `developer_token` | — | Your Google Ads API developer token |
 | `ads` | `customer_id` | — | Default Google Ads customer ID (auto-discovered by `adloop init`) |
 | `ads` | `login_customer_id` | — | Your MCC account ID |
-| `safety` | `max_daily_budget` | `50.00` | Maximum allowed daily budget per campaign |
-| `safety` | `require_dry_run` | `true` | Force all writes to dry-run mode |
-| `safety` | `two_phase_apply` | `false` | Refuse real applies until the plan had a dry-run pass |
+| `safety` | `max_daily_budget` | `50.00` | Daily budget cap per campaign. Requests above it are **clamped to the cap** (not rejected); the preview carries a bolded warning and a `budget_cap` object |
+| `safety` | `require_dry_run` | `true` | Force all writes to dry-run mode (local installs; hosted deployments default to `false` via `ADLOOP_REQUIRE_DRY_RUN`) |
+| `safety` | `two_phase_apply` | `false` | Refuse real applies until the plan had a dry-run pass (hosted: `ADLOOP_TWO_PHASE_APPLY`) |
 | `safety` | `blocked_operations` | `[]` | Operations to block entirely |
 
 ### Toolsets — trim the context footprint

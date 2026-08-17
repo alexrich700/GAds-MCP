@@ -130,6 +130,9 @@ set before real use.
 | `ADLOOP_GOOGLE_CLIENT_SECRET` | 🔒 secret | Web client secret |
 | `ADLOOP_ADS_DEVELOPER_TOKEN` | 🔒 secret | Ads dev token |
 | `ADLOOP_DB_POOL_MAX` | env (optional) | max pooled conns/instance (default 4) |
+| `ADLOOP_REQUIRE_DRY_RUN` | env (optional) | `false` by default. Set `true` to force every hosted write into dry-run (read-only server). Before this knob existed the hosted server inherited the library default `true` and could never write. |
+| `ADLOOP_TWO_PHASE_APPLY` | env (optional) | `false` by default. Set `true` to require one `dry_run=true` pass per plan before `dry_run=false` is accepted (extra round trip; the dry run does not call Google). |
+| `ADLOOP_MAX_DAILY_BUDGET` | env (optional) | `50` by default, account currency. Over-cap campaign budgets are clamped to this figure with a bolded warning, not rejected. Kept small on purpose so a misused connector token cannot rack up spend. |
 | `ADLOOP_DEV_REFRESH_TOKEN` | — | **local-dev only; never set in prod.** Phase E's per-user lookup replaces it. Set it temporarily only for a single-user staging smoke test. |
 
 ## Security

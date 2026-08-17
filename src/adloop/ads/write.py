@@ -1444,7 +1444,7 @@ def draft_campaign(
     from adloop.safety.guards import (
         SafetyViolation,
         check_blocked_operation,
-        check_budget_cap,
+        clamp_budget_cap,
     )
     from adloop.safety.preview import ChangePlan, store_plan
 
@@ -1472,6 +1472,12 @@ def draft_campaign(
     if normalized_display_network_enabled is None:
         normalized_display_network_enabled = False
 
+    # Over-cap budgets are clamped, not rejected: the plan is still usable, it
+    # just carries the cap. Clamp before validation so every downstream check
+    # (e.g. the 5x-target-CPA warning) sees the figure that will be applied.
+    requested_daily_budget = daily_budget
+    daily_budget, budget_cap_warning = clamp_budget_cap(daily_budget, config.safety)
+
     errors, warnings = _validate_campaign(
         config,
         campaign_name=campaign_name,
@@ -1491,10 +1497,9 @@ def draft_campaign(
     if errors:
         return {"error": "Validation failed", "details": errors}
 
-    try:
-        check_budget_cap(daily_budget, config.safety)
-    except SafetyViolation as e:
-        return {"error": str(e)}
+    if budget_cap_warning:
+        # First in the list so it is the first thing the agent reads.
+        warnings.insert(0, budget_cap_warning)
 
     # Resolve final_url_suffix: explicit param > hardcoded default (SEARCH only)
     if final_url_suffix is None and channel_type.upper() == "SEARCH":
@@ -1525,6 +1530,10 @@ def draft_campaign(
     preview = plan.to_preview()
     if warnings:
         preview["warnings"] = warnings
+    if budget_cap_warning:
+        preview["budget_cap"] = _budget_cap_detail(
+            requested_daily_budget, daily_budget, config.safety
+        )
     return preview
 
 
@@ -1614,7 +1623,7 @@ def update_campaign(
     from adloop.safety.guards import (
         SafetyViolation,
         check_blocked_operation,
-        check_budget_cap,
+        clamp_budget_cap,
     )
     from adloop.safety.preview import ChangePlan, store_plan
 
@@ -1625,6 +1634,8 @@ def update_campaign(
 
     errors = []
     warnings = []
+    budget_cap_warning = None
+    requested_daily_budget = daily_budget
 
     normalized_display_network_enabled, alias_errors = _normalize_display_network_setting(
         display_network_enabled,
@@ -1651,11 +1662,11 @@ def update_campaign(
     if daily_budget and daily_budget <= 0:
         errors.append("daily_budget must be greater than 0")
 
-    if daily_budget:
-        try:
-            check_budget_cap(daily_budget, config.safety)
-        except SafetyViolation as e:
-            errors.append(str(e))
+    if daily_budget and daily_budget > 0:
+        # Clamp rather than reject; the plan carries the cap and the preview
+        # says so in bold. Done before the 5x-CPA check below so that check
+        # sees the figure that will actually be applied.
+        daily_budget, budget_cap_warning = clamp_budget_cap(daily_budget, config.safety)
 
     if geo_target_ids is not None and len(geo_target_ids) == 0:
         errors.append("geo_target_ids cannot be empty — provide at least one geo target")
@@ -1683,6 +1694,9 @@ def update_campaign(
 
     if errors:
         return {"error": "Validation failed", "details": errors}
+
+    if budget_cap_warning:
+        warnings.append(budget_cap_warning)
 
     if bs == "MANUAL_CPC":
         warnings.append(
@@ -1752,6 +1766,10 @@ def update_campaign(
     preview = plan.to_preview()
     if warnings:
         preview["warnings"] = warnings
+    if budget_cap_warning:
+        preview["budget_cap"] = _budget_cap_detail(
+            requested_daily_budget, daily_budget, config.safety
+        )
     if preserved_negative_geos:
         preview["preserved_negative_geo_target_ids"] = sorted(
             preserved_negative_geos
@@ -2105,22 +2123,47 @@ def confirm_and_apply(
             # real writes — without this, agents (e.g. Claude Code) retry
             # in an infinite loop because the old message said to "call
             # again with dry_run=false", which they already did.
-            config_path = config.source_path or "~/.adloop/config.yaml"
             response["dry_run_forced_by"] = "config.safety.require_dry_run"
-            response["config_path"] = config_path
-            response["remediation"] = (
-                f"Edit {config_path}, set 'require_dry_run: false' under "
-                "'safety:', then restart the AdLoop MCP server. Passing "
-                "dry_run=false on this tool will keep being overridden "
-                "until that flag is flipped."
-            )
-            response["message"] = (
-                f"dry_run=false was IGNORED because 'safety.require_dry_run: true' "
-                f"is set in {config_path}. No changes were made. To apply real "
-                f"changes, flip that flag to false and restart the AdLoop MCP "
-                f"server — retrying this tool with dry_run=false alone will "
-                f"never succeed while the flag is on."
-            )
+            if config.source_path:
+                # Local install: the user owns the file, tell them exactly
+                # which one to edit.
+                config_path = config.source_path
+                response["config_path"] = config_path
+                response["remediation"] = (
+                    f"Edit {config_path}, set 'require_dry_run: false' under "
+                    "'safety:', then restart the AdLoop MCP server. Passing "
+                    "dry_run=false on this tool will keep being overridden "
+                    "until that flag is flipped."
+                )
+                response["message"] = (
+                    f"dry_run=false was IGNORED because 'safety.require_dry_run: true' "
+                    f"is set in {config_path}. No changes were made. To apply real "
+                    f"changes, flip that flag to false and restart the AdLoop MCP "
+                    f"server — retrying this tool with dry_run=false alone will "
+                    f"never succeed while the flag is on."
+                )
+            else:
+                # No config file behind this config (hosted / server mode, or a
+                # caller that built AdLoopConfig directly). There is nothing
+                # the end user can edit, so do NOT name ~/.adloop/config.yaml:
+                # that sends people hunting for a file that does not exist.
+                response["config_path"] = None
+                response["remediation"] = (
+                    "This AdLoop server is configured with "
+                    "'safety.require_dry_run: true', which forces every write "
+                    "into dry-run mode. There is no config file for you to "
+                    "edit; whoever operates the server has to turn the flag "
+                    "off (hosted deployments: set ADLOOP_REQUIRE_DRY_RUN=false "
+                    "and redeploy). Retrying with dry_run=false will keep "
+                    "being overridden until then."
+                )
+                response["message"] = (
+                    "dry_run=false was IGNORED because this AdLoop server has "
+                    "'safety.require_dry_run: true' set. No changes were made. "
+                    "Ask the server operator to disable it; retrying this tool "
+                    "with dry_run=false alone will never succeed while the flag "
+                    "is on."
+                )
         else:
             response["message"] = (
                 "Dry run completed — no changes were made to your Google Ads account. "
@@ -2195,6 +2238,20 @@ def confirm_and_apply(
 # ---------------------------------------------------------------------------
 # Internal validation helpers
 # ---------------------------------------------------------------------------
+
+
+def _budget_cap_detail(requested: float, applied: float, safety) -> dict:
+    """Structured companion to the bolded budget-cap warning.
+
+    Lets a client render the requested-vs-applied figures without parsing
+    prose. Only attached to a preview when the clamp actually fired.
+    """
+    return {
+        "requested_daily_budget": requested,
+        "applied_daily_budget": applied,
+        "max_daily_budget": float(safety.max_daily_budget),
+    }
+
 
 _VALID_MATCH_TYPES = {"EXACT", "PHRASE", "BROAD"}
 _VALID_ENTITY_TYPES = {"campaign", "ad_group", "ad", "keyword", "asset_group"}
