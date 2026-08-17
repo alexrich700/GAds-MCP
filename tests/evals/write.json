@@ -52,10 +52,10 @@
     {
       "id": 5,
       "prompt": "Change my campaign budget to 100 euros per day",
-      "expected_output": "Should check the max_daily_budget safety cap (default 50). If 100 > cap, REFUSE and explain. Otherwise call update_campaign.",
+      "expected_output": "Should call update_campaign. If 100 is above the max_daily_budget cap (default 50) the server either refuses (campaign already at/above the cap; never lowers a live budget) or drafts the raise AT the cap with a bolded FYI warning; the agent must surface that verbatim and never claim 100 was set.",
       "expectations": [
         "Checks the budget cap/safety configuration",
-        "If the requested budget exceeds the max_daily_budget cap, warns the user or refuses",
+        "If the requested budget exceeds the max_daily_budget cap, surfaces the server's bolded budget-cap warning or refusal verbatim instead of claiming the requested budget was set",
         "Calls update_campaign to change the budget if within allowed limits",
         "Presents the preview showing old vs new values"
       ]

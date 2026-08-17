@@ -217,33 +217,32 @@ These tools call both APIs internally and return unified results with computed `
 | `pause_entity` | Propose pausing a campaign / ad group / ad / keyword / asset_group | `entity_type`, `entity_id` |
 | `enable_entity` | Propose enabling a paused entity (campaign / ad group / ad / keyword / asset_group) | `entity_type`, `entity_id` |
 | `remove_entity` | Propose REMOVING an entity (irreversible) | `entity_type` (incl. "negative_keyword", "shared_criterion", "ad_group_criterion", "campaign_criterion", "campaign_asset", "asset", "customer_asset", "asset_group", "asset_group_signal", "label"), `entity_id` |
-| `confirm_and_apply` | Execute a previously previewed change. With `dry_run=true` (default), runs the plan against the Google Ads API with `validate_only=True` — full server-side validation, no changes committed. | `plan_id` from a draft tool, `dry_run` (default true) |
+| `confirm_and_apply` | Execute a previously previewed change. With `dry_run=true` (default) it records a dry run and commits nothing; it does NOT call the Google Ads API, so a passing dry run only proves the plan exists and has not expired. `dry_run=false` applies for real. | `plan_id` from a draft tool, `dry_run` (default true) |
 
 **Write tool workflow:**
 1. Call a `draft_*` tool → returns a preview with a `plan_id`
 2. Show the full preview to the user and wait for approval
-3. Call `confirm_and_apply(plan_id=..., dry_run=true)` first to test
-4. Only call with `dry_run=false` after explicit user confirmation
+3. Only call `confirm_and_apply(plan_id=..., dry_run=false)` after explicit user confirmation (a `dry_run=true` pass records a dry run but does not test anything against Google)
 
 **Safety behaviors:**
 - New campaigns, asset groups, and RSAs are created as PAUSED — user must explicitly enable them after review.
 - `draft_campaign` REQUIRES `geo_target_ids` and `language_ids` — campaigns without targeting waste budget. The tool rejects drafts with missing targeting.
-- `draft_campaign` enforces the `max_daily_budget` safety cap, rejects BROAD match + non-Smart Bidding, and warns if budget is below 5x target CPA.
+- `draft_campaign` and `draft_pmax_campaign` clamp any daily budget above `max_daily_budget` down to the cap (the preview carries a bolded `**FYI…**` warning and a `budget_cap` object; the plan applies AT the cap). `update_campaign` raises a below-cap budget up to the cap the same way, but REFUSES when the campaign is already at/above the cap (it never lowers a live budget). `draft_campaign` also rejects BROAD match + non-Smart Bidding and warns if budget is below 5x target CPA.
 - `draft_campaign` rejects `channel_type=PERFORMANCE_MAX` — PMax requires the asset_group + assets + signals to be created in the same mutate as the campaign, which the Search-shaped draft cannot produce. Use `draft_pmax_campaign` for PMax.
 - `draft_pmax_campaign` enforces Smart Bidding (rejects MANUAL_CPC and TARGET_SPEND) and PMax asset minimums (3+ HEADLINE, 1+ LONG_HEADLINE, 2+ DESCRIPTION, 1+ BUSINESS_NAME, 1+ MARKETING_IMAGE / SQUARE_MARKETING_IMAGE / LOGO). Image and logo assets must be uploaded before the campaign mutate — either via `draft_image_asset` (point at local JPG/PNG/GIF paths) or via the Google Ads UI — then pass the resulting resource_names. The Google Ads API rejects an asset_group create that's missing any image / logo minimum (`ASSET_GROUP_NOT_ENOUGH_MARKETING_IMAGE_ASSET` etc.), so there is no "text-only PMax draft" workflow.
 - `update_campaign` replaces geo/language targets entirely (not append). Pass the full desired list.
 - `remove_entity` is IRREVERSIBLE — always prefer `pause_entity` unless the user explicitly wants permanent removal. Removal triggers double confirmation in the safety layer.
 - `remove_entity` supports `entity_type` values: "campaign", "ad_group", "ad", "keyword", "negative_keyword", "campaign_asset", "asset_group", "asset_group_signal", "label". Use "negative_keyword" to remove campaign-level negative keywords. Use "campaign_asset" to remove sitelinks and other asset links from a campaign. Use "asset_group_signal" to remove a search-theme or audience signal — entity_id is the composite `assetGroupId~criterionId` returned by `get_asset_group_signals`. Use "label" to delete a Label resource (cascade-removes all assignments — to detach a single assignment, use `unapply_label` instead).
-- `confirm_and_apply` with `dry_run=true` runs the plan against the Google Ads API with `validate_only=True`. The API performs full validation server-side and returns errors if the plan is malformed (e.g. PMax with `network_settings`, invalid bidding strategy, dangling resource references) — but commits nothing. A passing dry run means the real apply will pass the same validation. A failing dry run returns `status: DRY_RUN_VALIDATION_FAILED` with the actual API error.
-- `draft_campaign` enforces the `max_daily_budget` safety cap, rejects BROAD match + non-Smart Bidding, warns if budget is below 5x target CPA, and interprets `max_cpc` by bidding strategy: MANUAL_CPC seeds the initial ad-group bid, TARGET_SPEND sets the Maximize Clicks CPC ceiling.
+- `confirm_and_apply` with `dry_run=true` does NOT call the Google Ads API: it logs a dry-run audit row, stamps the plan, and returns `DRY_RUN_SUCCESS`. It proves the plan exists and is unexpired, nothing more; API-level errors (malformed PMax shapes, invalid bidding strategy, dangling resource references) surface only on `dry_run=false`, as an `error` in the response. Do not tell the user a dry run "validated" the change against Google.
+- `draft_campaign` clamps any daily budget above `max_daily_budget` down to the cap (bolded warning + `budget_cap` in the preview), rejects BROAD match + non-Smart Bidding, warns if budget is below 5x target CPA, and interprets `max_cpc` by bidding strategy: MANUAL_CPC seeds the initial ad-group bid, TARGET_SPEND sets the Maximize Clicks CPC ceiling.
 - `display_network_enabled` is the canonical Search display-expansion flag. `display_expansion_enabled` is only a compatibility alias and should be normalized away before presenting the plan to the user.
 - `update_ad_group` is the right tool for later MANUAL_CPC bid changes. Use `update_campaign` for TARGET_SPEND (Maximize Clicks) `max_cpc` changes.
 - Ad-group pause/enable is already handled by `pause_entity` / `enable_entity` with `entity_type="ad_group"`; do not invent a separate pause tool.
 - `update_campaign` replaces POSITIVE geo/language targets entirely (not append). Pass the full desired list. NEGATIVE geo exclusions (criteria with `negative=TRUE`) are **preserved** across a positive-geo replacement — they survive the swap. The preview surfaces preserved negative geo IDs in `preserved_negative_geo_target_ids` so the change is auditable. To ADD negative geo exclusions (e.g. exclude a city inside a targeted state), use `add_negative_locations` — do not try to express exclusions through `geo_target_ids`. To remove a negative geo exclusion explicitly, use `remove_entity` with `entity_type="campaign_criterion"`.
 - `remove_entity` is IRREVERSIBLE — always prefer `pause_entity` unless the user explicitly wants permanent removal. Removal triggers double confirmation in the safety layer.
 - `remove_entity` supports `entity_type` values: "campaign", "ad_group", "ad", "keyword", "negative_keyword", "shared_criterion", "ad_group_criterion", "campaign_criterion", "campaign_asset", "asset", "customer_asset". Use "negative_keyword" to remove campaign-level negative keywords. Use "shared_criterion" to remove a keyword from a shared negative keyword list — the `entity_id` format is "sharedSetId~criterionId" (use the `resource_id` field from `get_negative_keyword_list_keywords`). Use "ad_group_criterion" or "campaign_criterion" to remove demographic targeting (age/gender/parental/income) — pass the `remove_id` returned by `get_demographic_targeting`. Use "campaign_asset" to remove sitelinks and other asset links from a campaign. Use "asset" to remove a standalone asset. Use "customer_asset" to remove a customer-level asset link.
-- `require_dry_run: true` in config overrides `dry_run=false` — the user must change the config to allow real mutations.
-- `two_phase_apply: true` in config (always on for AdLoop Cloud) refuses `dry_run=false` with status `DRY_RUN_REQUIRED` until that plan_id has completed one `dry_run=true` pass. Run the dry run, show the user, then apply — do not retry `dry_run=false` in a loop.
+- `require_dry_run: true` in config overrides `dry_run=false` — on a local install the user must change the config file; on a hosted (AdLoop Cloud) server it is off by default and only the operator can change it (`ADLOOP_REQUIRE_DRY_RUN`). When the response carries `dry_run_forced_by`, show its `remediation` verbatim and stop retrying.
+- `two_phase_apply: true` in config (off by default, including AdLoop Cloud; operators can enable it with `ADLOOP_TWO_PHASE_APPLY`) refuses `dry_run=false` with status `DRY_RUN_REQUIRED` until that plan_id has completed one `dry_run=true` pass. If you get `DRY_RUN_REQUIRED`, run the dry run, show the user, then apply — do not retry `dry_run=false` in a loop.
 - All operations (including dry runs) are logged to `~/.adloop/audit.log`.
 
 ## Safety Rules (CRITICAL — always follow)
@@ -252,7 +251,7 @@ These tools call both APIs internally and return unified results with computed `
 
 2. **Default to dry_run=true.** When calling confirm_and_apply, always use dry_run=true unless the user explicitly says to apply for real. Even then, `require_dry_run` in config may override this.
 
-3. **Respect budget caps.** The config has max_daily_budget set. Never propose a campaign budget above this.
+3. **Respect budget caps.** The config has max_daily_budget set. If the user asks for more, the server clamps the plan to the cap and returns a bolded `**FYI…**` warning plus a `budget_cap` object; show that warning to the user verbatim before applying so they know the campaign will go live at the cap, not the figure they asked for. Never claim the higher budget was set.
 
 4. **Double-check destructive operations.** For any pause, enable, remove, or budget change, explicitly warn the user about the impact before proceeding. `remove_entity` is irreversible — prefer `pause_entity` and only use removal when the user explicitly requests it.
 
@@ -383,7 +382,7 @@ PMax is structurally different from Search — different tools, different diagno
    - **Geo targeting**: ALWAYS ask the user which countries/regions to target if not specified. Never create a campaign without geo targets — untargeted campaigns waste budget on irrelevant geographies. Common IDs: 2276=Germany, 2040=Austria, 2756=Switzerland, 2840=USA, 2826=UK.
    - **Language targeting**: ALWAYS ask the user which languages to target if not specified. Language targeting restricts ads to users whose browser/Google language matches — without it, ads show to anyone in the geo region regardless of language. Common IDs: 1001=German, 1000=English, 1002=French.
    - Does the account have conversion tracking working? Call `attribution_check` — if zero conversions across the board, WARN that new campaigns won't help until tracking is fixed.
-   - Is the proposed budget reasonable? Must be ≤ `max_daily_budget` in config, and ideally ≥ 5x target CPA.
+   - Is the proposed budget reasonable? Anything above `max_daily_budget` is clamped to the cap (tell the user); ideally ≥ 5x target CPA.
 4. Call `draft_campaign` with campaign name, daily budget, bidding strategy, `geo_target_ids`, `language_ids`, ad group name, and optional keywords
 5. Review the preview and any `warnings` (budget sufficiency, MANUAL_CPC warning, BROAD match rejection)
 6. Present the complete preview to the user — emphasize the campaign will be created as PAUSED, and confirm the geo/language targets are correct
@@ -412,9 +411,8 @@ PMax is structurally different — there is no `draft_campaign` path for it. PMa
    - **Budget**: ideally ≥ 5x target CPA; the tool warns otherwise.
 4. Call `draft_pmax_campaign` with campaign details + the full `asset_group` dict (name, final_urls, headlines, long_headlines, descriptions, business_name, marketing_image_assets, square_marketing_image_assets, logo_assets, and optionally search_themes / audience_resource_names).
 5. Present the complete preview to the user — emphasize the campaign will be created as PAUSED.
-6. Call `confirm_and_apply(plan_id=..., dry_run=true)` first — this runs `validate_only=True` against Google Ads and surfaces any API rejections (e.g. invalid asset shapes, missing minimums) before applying for real.
-7. After dry run passes and user approves, call `confirm_and_apply(plan_id=..., dry_run=false)`.
-8. Remind the user to enable the PMax campaign via `enable_entity(entity_type='campaign', entity_id=...)` after reviewing in Google Ads UI.
+6. Once the user approves, call `confirm_and_apply(plan_id=..., dry_run=false)`. (A `dry_run=true` pass does not call Google, so it will not surface API rejections such as invalid asset shapes or missing minimums; those come back as an `error` on the real apply, in which case fix the draft and re-apply.)
+7. Remind the user to enable the PMax campaign via `enable_entity(entity_type='campaign', entity_id=...)` after reviewing in Google Ads UI.
 
 ### When user wants to upload images / logos for PMax
 

@@ -1444,7 +1444,7 @@ def draft_campaign(
     from adloop.safety.guards import (
         SafetyViolation,
         check_blocked_operation,
-        check_budget_cap,
+        clamp_budget_cap,
     )
     from adloop.safety.preview import ChangePlan, store_plan
 
@@ -1472,6 +1472,14 @@ def draft_campaign(
     if normalized_display_network_enabled is None:
         normalized_display_network_enabled = False
 
+    # Over-cap budgets are clamped, not rejected: the plan is still usable, it
+    # just carries the cap. Clamp before validation so every downstream check
+    # (e.g. the 5x-target-CPA warning) sees the figure that will be applied.
+    requested_daily_budget = daily_budget
+    daily_budget, budget_cap_warning = clamp_budget_cap(
+        daily_budget, config.safety, config.source_path
+    )
+
     errors, warnings = _validate_campaign(
         config,
         campaign_name=campaign_name,
@@ -1491,10 +1499,9 @@ def draft_campaign(
     if errors:
         return {"error": "Validation failed", "details": errors}
 
-    try:
-        check_budget_cap(daily_budget, config.safety)
-    except SafetyViolation as e:
-        return {"error": str(e)}
+    if budget_cap_warning:
+        # First in the list so it is the first thing the agent reads.
+        warnings.insert(0, budget_cap_warning)
 
     # Resolve final_url_suffix: explicit param > hardcoded default (SEARCH only)
     if final_url_suffix is None and channel_type.upper() == "SEARCH":
@@ -1521,10 +1528,19 @@ def draft_campaign(
             "max_cpc": max_cpc if max_cpc else None,
         },
     )
+    if budget_cap_warning:
+        # Also stored on the plan so the audit row records what was ASKED
+        # for, not just what was applied. The apply layer reads specific keys
+        # from ``changes`` and ignores this one.
+        plan.changes["budget_cap"] = _budget_cap_detail(
+            requested_daily_budget, daily_budget, config.safety
+        )
     store_plan(plan)
     preview = plan.to_preview()
     if warnings:
         preview["warnings"] = warnings
+    if budget_cap_warning:
+        preview["budget_cap"] = plan.changes["budget_cap"]
     return preview
 
 
@@ -1611,11 +1627,7 @@ def update_campaign(
     to change. Geo/language targets are REPLACED entirely (not appended).
     final_url_suffix: set or change the campaign's Final URL suffix. Pass "" to clear.
     """
-    from adloop.safety.guards import (
-        SafetyViolation,
-        check_blocked_operation,
-        check_budget_cap,
-    )
+    from adloop.safety.guards import SafetyViolation, check_blocked_operation
     from adloop.safety.preview import ChangePlan, store_plan
 
     try:
@@ -1625,6 +1637,8 @@ def update_campaign(
 
     errors = []
     warnings = []
+    budget_cap_warning = None
+    requested_daily_budget = daily_budget
 
     normalized_display_network_enabled, alias_errors = _normalize_display_network_setting(
         display_network_enabled,
@@ -1651,11 +1665,49 @@ def update_campaign(
     if daily_budget and daily_budget <= 0:
         errors.append("daily_budget must be greater than 0")
 
-    if daily_budget:
-        try:
-            check_budget_cap(daily_budget, config.safety)
-        except SafetyViolation as e:
-            errors.append(str(e))
+    if daily_budget and daily_budget > 0 and campaign_id:
+        cap = float(config.safety.max_daily_budget)
+        if daily_budget > cap:
+            # An over-cap UPDATE is different from an over-cap create: the
+            # campaign already has a live budget, and clamping blindly would
+            # turn "raise 200 -> 250" into a silent cut to the cap. So look
+            # at the current figure first (only on this path, so in-cap
+            # updates cost no extra API call):
+            #   current >= cap  -> refuse; never lower a live budget.
+            #   current <  cap  -> clamp up to the cap and say so in bold.
+            current = _campaign_current_daily_budget(config, customer_id, campaign_id)
+            if config.source_path:
+                how_to_raise = (
+                    f"raise safety.max_daily_budget in {config.source_path} and "
+                    f"restart the AdLoop MCP server, or set it in the Google Ads UI"
+                )
+            else:
+                how_to_raise = (
+                    "set it in the Google Ads UI, or ask the server operator to "
+                    "raise the cap"
+                )
+            if current is None:
+                errors.append("campaign_id was not found")
+            elif current >= cap:
+                errors.append(
+                    f"**Not applied: daily budget {daily_budget:.2f} exceeds this "
+                    f"server's cap of {cap:.2f}/day (safety.max_daily_budget), and "
+                    f"the campaign is already at {current:.2f}/day.** This tool "
+                    f"never sets a budget above the cap and will not lower a live "
+                    f"budget to fit it, so nothing was changed. To get "
+                    f"{daily_budget:.2f}/day, {how_to_raise}."
+                )
+            else:
+                daily_budget = cap
+                budget_cap_warning = (
+                    f"**FYI: daily budget will be raised to {cap:.2f} (the cap), "
+                    f"not the {requested_daily_budget:.2f} you asked for.** The "
+                    f"campaign is currently at {current:.2f}/day. This server caps "
+                    f"any campaign budget it sets at {cap:.2f}/day "
+                    f"(safety.max_daily_budget); the cap is intentional so a "
+                    f"misused connector cannot rack up spend. To go higher, "
+                    f"{how_to_raise}."
+                )
 
     if geo_target_ids is not None and len(geo_target_ids) == 0:
         errors.append("geo_target_ids cannot be empty — provide at least one geo target")
@@ -1683,6 +1735,9 @@ def update_campaign(
 
     if errors:
         return {"error": "Validation failed", "details": errors}
+
+    if budget_cap_warning:
+        warnings.append(budget_cap_warning)
 
     if bs == "MANUAL_CPC":
         warnings.append(
@@ -1741,6 +1796,11 @@ def update_campaign(
     if max_cpc:
         changes["max_cpc"] = max_cpc
 
+    if budget_cap_warning:
+        changes["budget_cap"] = _budget_cap_detail(
+            requested_daily_budget, daily_budget, config.safety
+        )
+
     plan = ChangePlan(
         operation="update_campaign",
         entity_type="campaign",
@@ -1752,6 +1812,8 @@ def update_campaign(
     preview = plan.to_preview()
     if warnings:
         preview["warnings"] = warnings
+    if budget_cap_warning:
+        preview["budget_cap"] = changes["budget_cap"]
     if preserved_negative_geos:
         preview["preserved_negative_geo_target_ids"] = sorted(
             preserved_negative_geos
@@ -2105,22 +2167,47 @@ def confirm_and_apply(
             # real writes — without this, agents (e.g. Claude Code) retry
             # in an infinite loop because the old message said to "call
             # again with dry_run=false", which they already did.
-            config_path = config.source_path or "~/.adloop/config.yaml"
             response["dry_run_forced_by"] = "config.safety.require_dry_run"
-            response["config_path"] = config_path
-            response["remediation"] = (
-                f"Edit {config_path}, set 'require_dry_run: false' under "
-                "'safety:', then restart the AdLoop MCP server. Passing "
-                "dry_run=false on this tool will keep being overridden "
-                "until that flag is flipped."
-            )
-            response["message"] = (
-                f"dry_run=false was IGNORED because 'safety.require_dry_run: true' "
-                f"is set in {config_path}. No changes were made. To apply real "
-                f"changes, flip that flag to false and restart the AdLoop MCP "
-                f"server — retrying this tool with dry_run=false alone will "
-                f"never succeed while the flag is on."
-            )
+            if config.source_path:
+                # Local install: the user owns the file, tell them exactly
+                # which one to edit.
+                config_path = config.source_path
+                response["config_path"] = config_path
+                response["remediation"] = (
+                    f"Edit {config_path}, set 'require_dry_run: false' under "
+                    "'safety:', then restart the AdLoop MCP server. Passing "
+                    "dry_run=false on this tool will keep being overridden "
+                    "until that flag is flipped."
+                )
+                response["message"] = (
+                    f"dry_run=false was IGNORED because 'safety.require_dry_run: true' "
+                    f"is set in {config_path}. No changes were made. To apply real "
+                    f"changes, flip that flag to false and restart the AdLoop MCP "
+                    f"server — retrying this tool with dry_run=false alone will "
+                    f"never succeed while the flag is on."
+                )
+            else:
+                # No config file behind this config (hosted / server mode, or a
+                # caller that built AdLoopConfig directly). There is nothing
+                # the end user can edit, so do NOT name ~/.adloop/config.yaml:
+                # that sends people hunting for a file that does not exist.
+                response["config_path"] = None
+                response["remediation"] = (
+                    "This AdLoop server is configured with "
+                    "'safety.require_dry_run: true', which forces every write "
+                    "into dry-run mode. There is no config file for you to "
+                    "edit; whoever operates the server has to turn the flag "
+                    "off (hosted deployments: set ADLOOP_REQUIRE_DRY_RUN=false "
+                    "and redeploy). Retrying with dry_run=false will keep "
+                    "being overridden until then."
+                )
+                response["message"] = (
+                    "dry_run=false was IGNORED because this AdLoop server has "
+                    "'safety.require_dry_run: true' set. No changes were made. "
+                    "Ask the server operator to disable it; retrying this tool "
+                    "with dry_run=false alone will never succeed while the flag "
+                    "is on."
+                )
         else:
             response["message"] = (
                 "Dry run completed — no changes were made to your Google Ads account. "
@@ -2172,29 +2259,64 @@ def confirm_and_apply(
         )
         return {"error": error_message, "plan_id": plan.plan_id}
 
-    log_mutation(
-        config.safety.log_file,
-        operation=plan.operation,
-        customer_id=plan.customer_id,
-        entity_type=plan.entity_type,
-        entity_id=plan.entity_id,
-        changes=plan.changes,
-        dry_run=False,
-        result="success",
-    )
-    remove_plan(plan.plan_id)
-
-    return {
+    # The mutation has landed. From here on the response MUST say APPLIED,
+    # whatever the bookkeeping does: an "error" would invite the agent to
+    # retry, and with a Postgres-backed plan store a retry re-executes the
+    # plan (second campaign, second budget update). Retire the plan first,
+    # then audit, each best-effort with a warning on failure.
+    response = {
         "status": "APPLIED",
         "plan_id": plan.plan_id,
         "operation": plan.operation,
         "result": result,
     }
+    try:
+        remove_plan(plan.plan_id)
+    except Exception as e:
+        response["plan_warning"] = (
+            "The change was APPLIED, but the pending plan could not be "
+            f"retired: {_extract_error_message(e)}. Do NOT call "
+            "confirm_and_apply again for this plan_id; it would apply twice."
+        )
+    try:
+        log_mutation(
+            config.safety.log_file,
+            operation=plan.operation,
+            customer_id=plan.customer_id,
+            entity_type=plan.entity_type,
+            entity_id=plan.entity_id,
+            changes=plan.changes,
+            dry_run=False,
+            result="success",
+        )
+    except Exception as e:
+        # Never report a landed change as failed. Say the audit row is
+        # missing so it can be reconciled from Google's change history.
+        response["audit_warning"] = (
+            "The change was APPLIED, but writing the audit record failed: "
+            f"{_extract_error_message(e)}. Reconcile from Google Ads change "
+            "history; do NOT re-apply."
+        )
+    return response
 
 
 # ---------------------------------------------------------------------------
 # Internal validation helpers
 # ---------------------------------------------------------------------------
+
+
+def _budget_cap_detail(requested: float, applied: float, safety) -> dict:
+    """Structured companion to the bolded budget-cap warning.
+
+    Lets a client render the requested-vs-applied figures without parsing
+    prose. Only attached to a preview when the clamp actually fired.
+    """
+    return {
+        "requested_daily_budget": requested,
+        "applied_daily_budget": applied,
+        "max_daily_budget": float(safety.max_daily_budget),
+    }
+
 
 _VALID_MATCH_TYPES = {"EXACT", "PHRASE", "BROAD"}
 _VALID_ENTITY_TYPES = {"campaign", "ad_group", "ad", "keyword", "asset_group"}
@@ -2251,6 +2373,28 @@ def _campaign_bidding_strategy(
     if not rows:
         return None
     return rows[0].get("campaign.bidding_strategy_type")
+
+
+def _campaign_current_daily_budget(
+    config: AdLoopConfig, customer_id: str, campaign_id: str
+) -> float | None:
+    """Return the campaign's current daily budget in account currency, or
+    None if the campaign does not exist."""
+    from adloop.ads.gaql import execute_query
+
+    query = f"""
+        SELECT campaign_budget.amount_micros
+        FROM campaign
+        WHERE campaign.id = {campaign_id}
+        LIMIT 1
+    """
+    rows = execute_query(config, customer_id, query)
+    if not rows:
+        return None
+    micros = rows[0].get("campaign_budget.amount_micros")
+    if micros is None:
+        return None
+    return float(micros) / 1_000_000
 
 
 def _existing_negative_geo_exclusions(

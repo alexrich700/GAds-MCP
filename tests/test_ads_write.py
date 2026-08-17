@@ -245,6 +245,166 @@ def test_draft_campaign_allows_target_spend_cpc_cap(config):
     assert result["changes"]["max_cpc"] == 1.75
 
 
+def test_draft_campaign_clamps_budget_over_cap_with_bold_warning():
+    config = AdLoopConfig(
+        ads=AdsConfig(customer_id="123-456-7890"),
+        safety=SafetyConfig(max_daily_budget=50.0),
+    )
+    result = write.draft_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_name="Big Launch",
+        daily_budget=500,
+        bidding_strategy="MAXIMIZE_CONVERSIONS",
+        geo_target_ids=["2840"],
+        language_ids=["1000"],
+    )
+
+    assert result.get("error") is None, result
+    assert result["status"] == "PENDING_CONFIRMATION"
+    # The plan carries the cap, so confirm_and_apply applies 50, not 500.
+    assert result["changes"]["daily_budget"] == 50.0
+    assert result["warnings"][0].startswith("**FYI")
+    assert "50.00" in result["warnings"][0]
+    assert "500.00" in result["warnings"][0]
+    assert result["budget_cap"] == {
+        "requested_daily_budget": 500,
+        "applied_daily_budget": 50.0,
+        "max_daily_budget": 50.0,
+    }
+
+
+def test_draft_campaign_clamp_feeds_downstream_checks():
+    """The 5x-target-CPA warning must be computed on the APPLIED budget,
+    otherwise a clamped plan could pass a check the real budget fails."""
+    config = AdLoopConfig(
+        ads=AdsConfig(customer_id="123-456-7890"),
+        safety=SafetyConfig(max_daily_budget=50.0),
+    )
+    result = write.draft_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_name="Big Launch",
+        daily_budget=500,           # 500 >= 5 * 40, but clamped 50 < 200
+        bidding_strategy="TARGET_CPA",
+        target_cpa=40,
+        geo_target_ids=["2840"],
+        language_ids=["1000"],
+    )
+
+    assert result.get("error") is None, result
+    assert result["changes"]["daily_budget"] == 50.0
+    assert any("5x" in w for w in result["warnings"]), result["warnings"]
+
+
+def test_draft_campaign_within_cap_has_no_cap_fields(config):
+    result = write.draft_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_name="Small Launch",
+        daily_budget=50,
+        bidding_strategy="MAXIMIZE_CONVERSIONS",
+        geo_target_ids=["2840"],
+        language_ids=["1000"],
+    )
+
+    assert result.get("error") is None, result
+    assert result["changes"]["daily_budget"] == 50
+    assert "budget_cap" not in result
+    assert not any(w.startswith("**FYI") for w in result.get("warnings", []))
+
+
+def test_draft_campaign_still_rejects_nonpositive_budget(config):
+    result = write.draft_campaign(
+        config,
+        customer_id="123-456-7890",
+        campaign_name="Zero",
+        daily_budget=0,
+        bidding_strategy="MAXIMIZE_CONVERSIONS",
+        geo_target_ids=["2840"],
+        language_ids=["1000"],
+    )
+    assert result["error"] == "Validation failed"
+    assert any("daily_budget" in d for d in result["details"])
+
+
+class TestUpdateCampaignBudgetCap:
+    """An over-cap UPDATE must never lower a live budget. The tool looks at
+    the campaign's current budget (only when the request is over the cap):
+    current >= cap -> refuse; current < cap -> raise TO the cap with the
+    bolded warning; in-cap requests never touch the API for this."""
+
+    def test_over_cap_on_campaign_below_cap_raises_to_cap(self, config, monkeypatch):
+        monkeypatch.setattr(write, "_campaign_current_daily_budget", lambda *_: 20.0)
+        result = write.update_campaign(
+            config,
+            customer_id="123-456-7890",
+            campaign_id="9001",
+            daily_budget=999,
+        )
+
+        assert result.get("error") is None, result
+        assert result["operation"] == "update_campaign"
+        assert result["changes"]["daily_budget"] == 50.0
+        fyi = [w for w in result["warnings"] if w.startswith("**FYI")]
+        assert len(fyi) == 1
+        assert "20.00" in fyi[0] and "50.00" in fyi[0] and "999.00" in fyi[0]
+        assert result["budget_cap"] == {
+            "requested_daily_budget": 999,
+            "applied_daily_budget": 50.0,
+            "max_daily_budget": 50.0,
+        }
+        # Stored on the plan too, so the audit row carries the requested figure.
+        assert result["changes"]["budget_cap"] == result["budget_cap"]
+
+    def test_over_cap_on_campaign_already_at_cap_is_refused(self, config, monkeypatch):
+        monkeypatch.setattr(write, "_campaign_current_daily_budget", lambda *_: 200.0)
+        result = write.update_campaign(
+            config,
+            customer_id="123-456-7890",
+            campaign_id="9001",
+            daily_budget=250,
+        )
+
+        assert result["error"] == "Validation failed"
+        detail = " ".join(result["details"])
+        assert detail.startswith("**Not applied")
+        assert "200.00" in detail and "250.00" in detail and "50.00" in detail
+        assert "will not lower a live budget" in detail
+        # Nothing was drafted: no plan to accidentally apply.
+        assert "plan_id" not in result
+
+    def test_over_cap_on_campaign_exactly_at_cap_is_refused(self, config, monkeypatch):
+        monkeypatch.setattr(write, "_campaign_current_daily_budget", lambda *_: 50.0)
+        result = write.update_campaign(
+            config, customer_id="123-456-7890", campaign_id="9001", daily_budget=60
+        )
+        assert result["error"] == "Validation failed"
+        assert any(d.startswith("**Not applied") for d in result["details"])
+
+    def test_over_cap_on_missing_campaign_errors(self, config, monkeypatch):
+        monkeypatch.setattr(write, "_campaign_current_daily_budget", lambda *_: None)
+        result = write.update_campaign(
+            config, customer_id="123-456-7890", campaign_id="9001", daily_budget=60
+        )
+        assert result["error"] == "Validation failed"
+        assert any("not found" in d for d in result["details"])
+
+    def test_within_cap_never_reads_current_budget(self, config, monkeypatch):
+        def _boom(*_):
+            raise AssertionError("must not query current budget for in-cap updates")
+
+        monkeypatch.setattr(write, "_campaign_current_daily_budget", _boom)
+        result = write.update_campaign(
+            config, customer_id="123-456-7890", campaign_id="9001", daily_budget=30
+        )
+
+        assert result.get("error") is None, result
+        assert result["changes"]["daily_budget"] == 30
+        assert "budget_cap" not in result
+        assert "budget_cap" not in result["changes"]
+
+
 def test_draft_campaign_rejects_conflicting_display_flags(config):
     result = write.draft_campaign(
         config,
@@ -1884,10 +2044,11 @@ class TestConfirmAndApplyDryRunOverride:
         assert "config_path" not in result
         assert "remediation" not in result
 
-    def test_forced_dry_run_falls_back_when_source_path_missing(self, tmp_path):
-        """Defensive default: if load_config didn't capture a path (legacy
-        callers constructing AdLoopConfig directly), we still surface a
-        path-shaped hint rather than an empty string."""
+    def test_forced_dry_run_uses_hosted_wording_when_source_path_missing(self, tmp_path):
+        """No source_path means no config file behind this config: hosted /
+        server mode, or a caller that built AdLoopConfig directly. The old
+        fallback named ~/.adloop/config.yaml, which sent hosted users hunting
+        for a file that does not exist on their machine or on the server."""
         config = AdLoopConfig(
             ads=AdsConfig(customer_id="123-456-7890"),
             safety=SafetyConfig(
@@ -1900,8 +2061,13 @@ class TestConfirmAndApplyDryRunOverride:
 
         result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
 
-        assert result["config_path"] == "~/.adloop/config.yaml"
-        assert "~/.adloop/config.yaml" in result["remediation"]
+        assert result["status"] == "DRY_RUN_SUCCESS"
+        assert result["dry_run_forced_by"] == "config.safety.require_dry_run"
+        assert result["config_path"] is None
+        assert "~/.adloop" not in result["remediation"]
+        assert "~/.adloop" not in result["message"]
+        assert "ADLOOP_REQUIRE_DRY_RUN" in result["remediation"]
+        assert "server" in result["remediation"].lower()
 
     def test_forced_dry_run_is_audit_logged(self, tmp_path):
         """The audit log must still reflect that a dry run happened."""
@@ -2024,6 +2190,224 @@ class TestTwoPhaseApply:
 
         assert result["status"] == "DRY_RUN_SUCCESS"
         assert result["dry_run_forced_by"] == "config.safety.require_dry_run"
+
+
+class TestClampedPlanApplies:
+    """The clamped figure is what confirm_and_apply hands to the apply layer,
+    and what the audit sink records."""
+
+    def _config(self, tmp_path) -> AdLoopConfig:
+        return AdLoopConfig(
+            ads=AdsConfig(customer_id="123-456-7890"),
+            safety=SafetyConfig(
+                require_dry_run=False,
+                max_daily_budget=50.0,
+                log_file=str(tmp_path / "audit.log"),
+            ),
+            source_path=str(tmp_path / "config.yaml"),
+        )
+
+    def test_clamped_create_reaches_execute_with_capped_budget(self, tmp_path, monkeypatch):
+        config = self._config(tmp_path)
+        preview = write.draft_campaign(
+            config,
+            customer_id="123-456-7890",
+            campaign_name="Big Launch",
+            daily_budget=500,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+        )
+        assert preview["changes"]["daily_budget"] == 50.0
+
+        seen = {}
+
+        def _fake_execute(_config, plan):
+            seen["daily_budget"] = plan.changes["daily_budget"]
+            seen["budget_cap"] = plan.changes.get("budget_cap")
+            return {"campaign": "customers/123/campaigns/1"}
+
+        monkeypatch.setattr(write, "_execute_plan", _fake_execute)
+        result = write.confirm_and_apply(config, plan_id=preview["plan_id"], dry_run=False)
+
+        assert result["status"] == "APPLIED", result
+        assert seen["daily_budget"] == 50.0
+        assert seen["budget_cap"]["requested_daily_budget"] == 500
+        audit = (tmp_path / "audit.log").read_text()
+        assert '"requested_daily_budget": 500' in audit
+        assert '"result": "success"' in audit
+
+    def test_local_clamp_warning_names_the_config_file(self, tmp_path):
+        config = self._config(tmp_path)
+        preview = write.draft_campaign(
+            config,
+            customer_id="123-456-7890",
+            campaign_name="Big Launch",
+            daily_budget=500,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+        )
+        assert str(tmp_path / "config.yaml") in preview["warnings"][0]
+
+    def test_hosted_clamp_warning_points_at_operator(self, tmp_path):
+        config = self._config(tmp_path)
+        config.source_path = ""
+        preview = write.draft_campaign(
+            config,
+            customer_id="123-456-7890",
+            campaign_name="Big Launch",
+            daily_budget=500,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+        )
+        assert "config.yaml" not in preview["warnings"][0]
+        assert "server operator" in preview["warnings"][0]
+
+
+class TestHostedTenantCanApply:
+    """End to end: build_tenant_config() (server mode defaults) must let a
+    real write reach _execute_plan. This is the regression the whole change
+    exists for: hosted tenants used to inherit require_dry_run=True."""
+
+    def test_hosted_defaults_reach_execute(self, tmp_path, monkeypatch):
+        from adloop.hosting.tenant_config import build_tenant_config
+
+        for name in ("ADLOOP_REQUIRE_DRY_RUN", "ADLOOP_TWO_PHASE_APPLY",
+                     "ADLOOP_MAX_DAILY_BUDGET", "ADLOOP_BLOCKED_OPERATIONS"):
+            monkeypatch.delenv(name, raising=False)
+        config = build_tenant_config("tenant-1")
+        config.ads.customer_id = "123-456-7890"
+        config.safety.log_file = str(tmp_path / "audit.log")
+
+        preview = write.draft_campaign(
+            config,
+            customer_id="123-456-7890",
+            campaign_name="Hosted Launch",
+            daily_budget=30,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+        )
+        assert preview["status"] == "PENDING_CONFIRMATION"
+
+        called = {}
+        monkeypatch.setattr(
+            write, "_execute_plan", lambda _c, plan: called.setdefault("op", plan.operation) or {"ok": 1}
+        )
+        result = write.confirm_and_apply(config, plan_id=preview["plan_id"], dry_run=False)
+
+        assert result["status"] == "APPLIED", result
+        assert called["op"] == "create_campaign"
+        assert "dry_run_forced_by" not in result
+        # Plan is retired: a second apply must not find it.
+        again = write.confirm_and_apply(config, plan_id=preview["plan_id"], dry_run=False)
+        assert "No pending plan" in again["error"]
+
+    def test_hosted_env_typo_locks_writes_and_uses_hosted_wording(self, tmp_path, monkeypatch):
+        from adloop.hosting.tenant_config import build_tenant_config
+
+        monkeypatch.setenv("ADLOOP_REQUIRE_DRY_RUN", "1.0")  # typo -> safe value True
+        config = build_tenant_config("tenant-1")
+        config.ads.customer_id = "123-456-7890"
+        config.safety.log_file = str(tmp_path / "audit.log")
+        preview = write.draft_campaign(
+            config,
+            customer_id="123-456-7890",
+            campaign_name="Hosted Launch",
+            daily_budget=30,
+            bidding_strategy="MAXIMIZE_CONVERSIONS",
+            geo_target_ids=["2840"],
+            language_ids=["1000"],
+        )
+        monkeypatch.setattr(write, "_execute_plan", lambda *_: pytest.fail("must not execute"))
+        result = write.confirm_and_apply(config, plan_id=preview["plan_id"], dry_run=False)
+
+        assert result["status"] == "DRY_RUN_SUCCESS"
+        assert result["dry_run_forced_by"] == "config.safety.require_dry_run"
+        assert result["config_path"] is None
+        assert "~/.adloop" not in result["remediation"]
+
+
+class TestApplyRetiresPlanBeforeAudit:
+    """A failing audit write after a successful mutation must not leave the
+    plan pending (a retry would re-execute it) and must not report the
+    landed change as failed."""
+
+    def _config(self, tmp_path) -> AdLoopConfig:
+        return AdLoopConfig(
+            ads=AdsConfig(customer_id="123-456-7890"),
+            safety=SafetyConfig(require_dry_run=False, log_file=str(tmp_path / "audit.log")),
+            source_path=str(tmp_path / "config.yaml"),
+        )
+
+    def _stage_plan(self) -> str:
+        plan = preview_store.ChangePlan(
+            operation="add_keywords",
+            entity_type="keyword",
+            entity_id="ag-1",
+            customer_id="123-456-7890",
+            changes={"keywords": [{"text": "x", "match_type": "EXACT"}]},
+        )
+        preview_store.store_plan(plan)
+        return plan.plan_id
+
+    def test_audit_failure_after_apply_is_reported_not_retried(self, tmp_path, monkeypatch):
+        config = self._config(tmp_path)
+        plan_id = self._stage_plan()
+        executions = []
+        monkeypatch.setattr(
+            write, "_execute_plan", lambda *_: executions.append(1) or {"ok": True}
+        )
+
+        from adloop.safety import audit as audit_mod
+
+        real_log = audit_mod.log_mutation
+
+        def _flaky_log(*args, **kwargs):
+            if kwargs.get("result") == "success":
+                raise RuntimeError("pooler hiccup")
+            return real_log(*args, **kwargs)
+
+        # confirm_and_apply imports log_mutation from adloop.safety.audit at
+        # call time, so patch it at the source.
+        monkeypatch.setattr(audit_mod, "log_mutation", _flaky_log)
+
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "APPLIED"
+        assert "audit_warning" in result
+        assert "do NOT re-apply" in result["audit_warning"]
+        assert executions == [1]
+        # Plan is gone: retrying cannot execute a second time.
+        again = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+        assert "No pending plan" in again["error"]
+        assert executions == [1]
+
+
+    def test_remove_plan_failure_after_apply_still_reports_applied(self, tmp_path, monkeypatch):
+        config = self._config(tmp_path)
+        plan_id = self._stage_plan()
+        executions = []
+        monkeypatch.setattr(
+            write, "_execute_plan", lambda *_: executions.append(1) or {"ok": True}
+        )
+        def _boom(*_):
+            raise RuntimeError("db down")
+
+        # confirm_and_apply imports remove_plan from adloop.safety.preview at
+        # call time, so patch it at the source.
+        monkeypatch.setattr(preview_store, "remove_plan", _boom)
+
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "APPLIED"
+        assert "plan_warning" in result
+        assert "apply twice" in result["plan_warning"]
+        assert executions == [1]
+        # Audit still written on the success path.
+        assert '"result": "success"' in (tmp_path / "audit.log").read_text()
 
 
 class TestPlanExpiry:

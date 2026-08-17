@@ -1594,6 +1594,10 @@ def draft_pmax_campaign(
 ) -> dict:
     """Draft a Performance Max campaign with its first asset group — returns PREVIEW.
 
+    Budget cap: daily_budget above safety.max_daily_budget (default 50.00) is
+    drafted AT the cap, not rejected; the preview carries a bolded
+    "**FYI ...**" warning plus a `budget_cap` object. Show it verbatim.
+
     Creates: CampaignBudget + Campaign (PAUSED, no network_settings) + geo +
     language + AssetGroup (PAUSED) + Assets + AssetGroupAsset links + Signals
     in one atomic mutate. PMax requires this all-in-one shape.
@@ -2239,6 +2243,12 @@ def draft_campaign(
 ) -> dict:
     """Draft a full campaign structure — returns a PREVIEW, does NOT create anything.
 
+    Budget cap: if daily_budget is above the server's safety.max_daily_budget
+    (default 50.00), the plan is drafted AT the cap, not rejected. The preview
+    then carries a bolded "**FYI ...**" warning first in `warnings` plus a
+    `budget_cap` object {requested, applied, max}. Show that warning to the
+    user verbatim before applying and never claim the higher budget was set.
+
     Creates: CampaignBudget + Campaign (PAUSED) + AdGroup + optional Keywords
     + geo targeting + language targeting.
     Ads are NOT included — use draft_responsive_search_ad after the campaign exists.
@@ -2340,6 +2350,14 @@ def update_campaign(
     max_cpc: float = 0,
 ) -> dict:
     """Draft an update to an existing campaign — returns a PREVIEW, does NOT apply.
+
+    Budget cap: daily_budget above safety.max_daily_budget (default 50.00) is
+    handled by looking at the campaign's CURRENT budget. If the campaign is
+    already at or above the cap the update is REFUSED (this tool never lowers
+    a live budget to the cap; tell the user to change it in the Google Ads
+    UI). If it is below the cap, the plan raises it TO the cap and the preview
+    carries a bolded "**FYI ...**" warning plus a `budget_cap` object; show
+    the warning verbatim before applying.
 
     Only include the parameters you want to change. Omit the rest.
 
@@ -2938,19 +2956,33 @@ def confirm_and_apply(
     IMPORTANT: Defaults to dry_run=True. You MUST explicitly pass dry_run=false
     to make real changes to the Google Ads account.
 
-    Config override: if 'safety.require_dry_run: true' is set in the user's
-    config file (default ~/.adloop/config.yaml), dry_run=false is IGNORED
-    and this tool will keep returning DRY_RUN_SUCCESS. When that happens the
-    response includes 'dry_run_forced_by', 'config_path', and 'remediation'
+    Config override: if 'safety.require_dry_run: true' is set on this server
+    (local installs: the user's config file, default ~/.adloop/config.yaml;
+    hosted deployments: the ADLOOP_REQUIRE_DRY_RUN env var, off by default),
+    dry_run=false is IGNORED and this tool will keep returning
+    DRY_RUN_SUCCESS. When that happens the response includes
+    'dry_run_forced_by', 'config_path' (null on hosted), and 'remediation'
     fields — surface those to the user verbatim and STOP retrying. Calling
     this tool again with dry_run=false will not change anything until the
-    user edits the config file, sets 'require_dry_run: false', and restarts
-    the AdLoop MCP server.
+    flag is turned off and the server restarted/redeployed.
 
-    Two-phase apply: if 'safety.two_phase_apply: true' is set (always on
-    for AdLoop Cloud tenants), dry_run=false is REFUSED with status
+    Two-phase apply: if 'safety.two_phase_apply: true' is set (off by
+    default everywhere; hosted deployments can enable it with
+    ADLOOP_TWO_PHASE_APPLY=true), dry_run=false is REFUSED with status
     DRY_RUN_REQUIRED until this plan_id has completed one dry_run=true
     pass. Run the dry run, show it to the user, then apply for real.
+
+    Budget cap: draft_campaign / draft_pmax_campaign CLAMP any daily_budget
+    above 'safety.max_daily_budget' (default 50.00) to the cap;
+    update_campaign raises a below-cap budget up to the cap or REFUSES when
+    the campaign is already at/above it. Clamped previews carry a bolded
+    warning plus a 'budget_cap' object. Show that warning to the user
+    verbatim before applying; the plan will apply at the cap, not the
+    requested figure.
+
+    On success the response is {"status": "APPLIED", ...}. If it also carries
+    'audit_warning', the change DID land but the audit row could not be
+    written: tell the user, do not re-apply.
 
     The plan_id comes from a prior draft_* or pause/enable tool call.
     """

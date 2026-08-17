@@ -58,8 +58,9 @@ by hand, and never state tool counts in prose anywhere (they rot).
 ## Safety Model (Summary)
 
 - Two-step writes: draft -> preview -> confirm_and_apply
-- dry_run=true by default; require_dry_run in config overrides
-- two_phase_apply in config: real applies refused (DRY_RUN_REQUIRED) until the plan had one dry-run pass; always on for cloud tenants
+- dry_run=true by default; require_dry_run in config overrides (hosted: off by default, `ADLOOP_REQUIRE_DRY_RUN`)
+- two_phase_apply in config: real applies refused (DRY_RUN_REQUIRED) until the plan had one dry-run pass; off by default everywhere (hosted: `ADLOOP_TWO_PHASE_APPLY`)
+- max_daily_budget (default 50.00, hosted: `ADLOOP_MAX_DAILY_BUDGET`): over-cap budgets are CLAMPED to the cap with a bolded warning + `budget_cap` in the preview, not rejected
 - Budget caps enforced; new campaigns/ads created as PAUSED
 - Broad Match + Manual CPC automatically blocked
 - All mutations logged to ~/.adloop/audit.log

@@ -80,22 +80,128 @@ def test_resolve_tenant_requires_a_subject():
 
 # --- build_tenant_config (placeholder) -------------------------------------
 
-def test_build_tenant_config_stamps_shared_ads_creds(monkeypatch):
+_SAFETY_ENV = (
+    "ADLOOP_REQUIRE_DRY_RUN",
+    "ADLOOP_TWO_PHASE_APPLY",
+    "ADLOOP_MAX_DAILY_BUDGET",
+    "ADLOOP_BLOCKED_OPERATIONS",
+)
+
+
+@pytest.fixture
+def clean_safety_env(monkeypatch):
+    from adloop.hosting import tenant_config as tc
+
+    for name in _SAFETY_ENV:
+        monkeypatch.delenv(name, raising=False)
+    # Bad env values warn once per process; reset so each test sees its own.
+    monkeypatch.setattr(tc, "_warned", set())
+
+
+def test_build_tenant_config_stamps_shared_ads_creds(monkeypatch, clean_safety_env):
     monkeypatch.setenv("ADLOOP_ADS_DEVELOPER_TOKEN", "dev-tok-xyz")
     monkeypatch.setenv("ADLOOP_ADS_LOGIN_CUSTOMER_ID", "4762726066")
     cfg = build_tenant_config("user-abc")
     assert cfg.ads.developer_token == "dev-tok-xyz"
     assert cfg.ads.login_customer_id == "4762726066"
     assert cfg.ads.customer_id == "4762726066"  # MCC stands in until Phase E
-    assert cfg.safety.two_phase_apply is True  # hosted tenants always two-phase
 
 
-def test_build_tenant_config_defaults_when_env_absent(monkeypatch):
+def test_build_tenant_config_defaults_when_env_absent(monkeypatch, clean_safety_env):
     monkeypatch.delenv("ADLOOP_ADS_DEVELOPER_TOKEN", raising=False)
     monkeypatch.delenv("ADLOOP_ADS_LOGIN_CUSTOMER_ID", raising=False)
     cfg = build_tenant_config("user-abc")
     assert cfg.ads.developer_token == ""
-    assert cfg.safety.two_phase_apply is True
+
+
+# --- hosted safety posture ---------------------------------------------------
+#
+# The hosted server has no ~/.adloop/config.yaml, so these env vars are the
+# ONLY way to set the safety flags. Before they existed, build_tenant_config
+# inherited SafetyConfig's library default require_dry_run=True, which made
+# every hosted write a dry run with no way to unlock it.
+
+
+def test_hosted_writes_are_unlocked_by_default(clean_safety_env):
+    cfg = build_tenant_config("user-abc")
+    assert cfg.safety.require_dry_run is False
+    assert cfg.safety.two_phase_apply is False
+
+
+def test_hosted_budget_cap_defaults_to_50(clean_safety_env):
+    cfg = build_tenant_config("user-abc")
+    assert cfg.safety.max_daily_budget == 50.0
+
+
+def test_hosted_source_path_is_empty(clean_safety_env):
+    # confirm_and_apply uses an empty source_path to pick the hosted wording
+    # (no "edit ~/.adloop/config.yaml" hint that points at a nonexistent file).
+    cfg = build_tenant_config("user-abc")
+    assert cfg.source_path == ""
+
+
+@pytest.mark.parametrize("raw", ["true", "1", "yes", "on", "TRUE", " True "])
+def test_require_dry_run_env_truthy(monkeypatch, clean_safety_env, raw):
+    monkeypatch.setenv("ADLOOP_REQUIRE_DRY_RUN", raw)
+    assert build_tenant_config("u").safety.require_dry_run is True
+
+
+@pytest.mark.parametrize("raw", ["false", "0", "no", "off", "OFF", " False ", ""])
+def test_require_dry_run_env_falsy_or_blank_is_off(monkeypatch, clean_safety_env, raw):
+    monkeypatch.setenv("ADLOOP_REQUIRE_DRY_RUN", raw)
+    assert build_tenant_config("u").safety.require_dry_run is False
+
+
+@pytest.mark.parametrize("raw", ["banana", "1.0", "t", "y", "enabled", "ture"])
+def test_require_dry_run_env_garbage_fails_closed(monkeypatch, clean_safety_env, raw, caplog):
+    """A typo in a safety flag must LOCK writes, not silently unlock them."""
+    monkeypatch.setenv("ADLOOP_REQUIRE_DRY_RUN", raw)
+    with caplog.at_level("WARNING", logger="adloop.hosting.tenant_config"):
+        assert build_tenant_config("u").safety.require_dry_run is True
+    assert any("ADLOOP_REQUIRE_DRY_RUN" in r.getMessage() for r in caplog.records)
+
+
+def test_two_phase_apply_env_garbage_fails_closed(monkeypatch, clean_safety_env):
+    monkeypatch.setenv("ADLOOP_TWO_PHASE_APPLY", "maybe")
+    assert build_tenant_config("u").safety.two_phase_apply is True
+
+
+def test_two_phase_apply_env_can_turn_it_back_on(monkeypatch, clean_safety_env):
+    monkeypatch.setenv("ADLOOP_TWO_PHASE_APPLY", "true")
+    assert build_tenant_config("u").safety.two_phase_apply is True
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [("500", 500.0), ("75.5", 75.5), (" 120 ", 120.0)],
+)
+def test_max_daily_budget_env_override(monkeypatch, clean_safety_env, raw, expected):
+    monkeypatch.setenv("ADLOOP_MAX_DAILY_BUDGET", raw)
+    assert build_tenant_config("u").safety.max_daily_budget == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "abc", "0", "-10", "nan-ish", "nan", "NaN", "-nan", "inf", "Infinity", "+inf", "1e400", "50,00"],
+)
+def test_max_daily_budget_env_invalid_falls_back_to_50(
+    monkeypatch, clean_safety_env, raw
+):
+    """nan would make every clamp comparison false (everything clamps to nan);
+    inf would silently disable the cap. Both must fall back to the default."""
+    monkeypatch.setenv("ADLOOP_MAX_DAILY_BUDGET", raw)
+    cap = build_tenant_config("u").safety.max_daily_budget
+    assert cap == 50.0
+
+
+def test_blocked_operations_env(monkeypatch, clean_safety_env):
+    monkeypatch.setenv("ADLOOP_BLOCKED_OPERATIONS", " remove_entity, create_pmax_campaign ,remove_entity,, ")
+    cfg = build_tenant_config("u")
+    assert cfg.safety.blocked_operations == ["remove_entity", "create_pmax_campaign"]
+
+
+def test_blocked_operations_env_default_empty(clean_safety_env):
+    assert build_tenant_config("u").safety.blocked_operations == []
 
 
 # --- redirect_uri connector pinning (scales across dynamic registration) ----
