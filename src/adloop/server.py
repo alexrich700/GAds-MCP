@@ -1594,6 +1594,10 @@ def draft_pmax_campaign(
 ) -> dict:
     """Draft a Performance Max campaign with its first asset group — returns PREVIEW.
 
+    Budget cap: daily_budget above safety.max_daily_budget (default 50.00) is
+    drafted AT the cap, not rejected; the preview carries a bolded
+    "**FYI ...**" warning plus a `budget_cap` object. Show it verbatim.
+
     Creates: CampaignBudget + Campaign (PAUSED, no network_settings) + geo +
     language + AssetGroup (PAUSED) + Assets + AssetGroupAsset links + Signals
     in one atomic mutate. PMax requires this all-in-one shape.
@@ -2239,6 +2243,12 @@ def draft_campaign(
 ) -> dict:
     """Draft a full campaign structure — returns a PREVIEW, does NOT create anything.
 
+    Budget cap: if daily_budget is above the server's safety.max_daily_budget
+    (default 50.00), the plan is drafted AT the cap, not rejected. The preview
+    then carries a bolded "**FYI ...**" warning first in `warnings` plus a
+    `budget_cap` object {requested, applied, max}. Show that warning to the
+    user verbatim before applying and never claim the higher budget was set.
+
     Creates: CampaignBudget + Campaign (PAUSED) + AdGroup + optional Keywords
     + geo targeting + language targeting.
     Ads are NOT included — use draft_responsive_search_ad after the campaign exists.
@@ -2340,6 +2350,14 @@ def update_campaign(
     max_cpc: float = 0,
 ) -> dict:
     """Draft an update to an existing campaign — returns a PREVIEW, does NOT apply.
+
+    Budget cap: daily_budget above safety.max_daily_budget (default 50.00) is
+    handled by looking at the campaign's CURRENT budget. If the campaign is
+    already at or above the cap the update is REFUSED (this tool never lowers
+    a live budget to the cap; tell the user to change it in the Google Ads
+    UI). If it is below the cap, the plan raises it TO the cap and the preview
+    carries a bolded "**FYI ...**" warning plus a `budget_cap` object; show
+    the warning verbatim before applying.
 
     Only include the parameters you want to change. Omit the rest.
 

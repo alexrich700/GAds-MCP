@@ -1476,7 +1476,9 @@ def draft_campaign(
     # just carries the cap. Clamp before validation so every downstream check
     # (e.g. the 5x-target-CPA warning) sees the figure that will be applied.
     requested_daily_budget = daily_budget
-    daily_budget, budget_cap_warning = clamp_budget_cap(daily_budget, config.safety)
+    daily_budget, budget_cap_warning = clamp_budget_cap(
+        daily_budget, config.safety, config.source_path
+    )
 
     errors, warnings = _validate_campaign(
         config,
@@ -1526,14 +1528,19 @@ def draft_campaign(
             "max_cpc": max_cpc if max_cpc else None,
         },
     )
+    if budget_cap_warning:
+        # Also stored on the plan so the audit row records what was ASKED
+        # for, not just what was applied. The apply layer reads specific keys
+        # from ``changes`` and ignores this one.
+        plan.changes["budget_cap"] = _budget_cap_detail(
+            requested_daily_budget, daily_budget, config.safety
+        )
     store_plan(plan)
     preview = plan.to_preview()
     if warnings:
         preview["warnings"] = warnings
     if budget_cap_warning:
-        preview["budget_cap"] = _budget_cap_detail(
-            requested_daily_budget, daily_budget, config.safety
-        )
+        preview["budget_cap"] = plan.changes["budget_cap"]
     return preview
 
 
@@ -1662,11 +1669,40 @@ def update_campaign(
     if daily_budget and daily_budget <= 0:
         errors.append("daily_budget must be greater than 0")
 
-    if daily_budget and daily_budget > 0:
-        # Clamp rather than reject; the plan carries the cap and the preview
-        # says so in bold. Done before the 5x-CPA check below so that check
-        # sees the figure that will actually be applied.
-        daily_budget, budget_cap_warning = clamp_budget_cap(daily_budget, config.safety)
+    if daily_budget and daily_budget > 0 and campaign_id:
+        cap = float(config.safety.max_daily_budget)
+        if daily_budget > cap:
+            # An over-cap UPDATE is different from an over-cap create: the
+            # campaign already has a live budget, and clamping blindly would
+            # turn "raise 200 -> 250" into a silent cut to the cap. So look
+            # at the current figure first (only on this path, so in-cap
+            # updates cost no extra API call):
+            #   current >= cap  -> refuse; never lower a live budget.
+            #   current <  cap  -> clamp up to the cap and say so in bold.
+            current = _campaign_current_daily_budget(config, customer_id, campaign_id)
+            if current is None:
+                errors.append("campaign_id was not found")
+            elif current >= cap:
+                errors.append(
+                    f"**Not applied: daily budget {daily_budget:.2f} exceeds this "
+                    f"server's cap of {cap:.2f}/day (safety.max_daily_budget), and "
+                    f"the campaign is already at {current:.2f}/day.** Applying the "
+                    f"cap would LOWER the live budget, so nothing was changed. "
+                    f"Budgets above the cap have to be set in the Google Ads UI "
+                    f"(or the server operator raises the cap)."
+                )
+            else:
+                daily_budget = cap
+                budget_cap_warning = (
+                    f"**FYI: daily budget will be raised to {cap:.2f} (the cap), "
+                    f"not the {requested_daily_budget:.2f} you asked for.** The "
+                    f"campaign is currently at {current:.2f}/day. This server caps "
+                    f"any campaign budget it sets at {cap:.2f}/day "
+                    f"(safety.max_daily_budget); the cap is intentional so a "
+                    f"misused connector cannot rack up spend. Anything above the "
+                    f"cap has to be set in the Google Ads UI (or the server "
+                    f"operator raises the cap)."
+                )
 
     if geo_target_ids is not None and len(geo_target_ids) == 0:
         errors.append("geo_target_ids cannot be empty — provide at least one geo target")
@@ -1755,6 +1791,11 @@ def update_campaign(
     if max_cpc:
         changes["max_cpc"] = max_cpc
 
+    if budget_cap_warning:
+        changes["budget_cap"] = _budget_cap_detail(
+            requested_daily_budget, daily_budget, config.safety
+        )
+
     plan = ChangePlan(
         operation="update_campaign",
         entity_type="campaign",
@@ -1767,9 +1808,7 @@ def update_campaign(
     if warnings:
         preview["warnings"] = warnings
     if budget_cap_warning:
-        preview["budget_cap"] = _budget_cap_detail(
-            requested_daily_budget, daily_budget, config.safety
-        )
+        preview["budget_cap"] = changes["budget_cap"]
     if preserved_negative_geos:
         preview["preserved_negative_geo_target_ids"] = sorted(
             preserved_negative_geos
@@ -2215,24 +2254,38 @@ def confirm_and_apply(
         )
         return {"error": error_message, "plan_id": plan.plan_id}
 
-    log_mutation(
-        config.safety.log_file,
-        operation=plan.operation,
-        customer_id=plan.customer_id,
-        entity_type=plan.entity_type,
-        entity_id=plan.entity_id,
-        changes=plan.changes,
-        dry_run=False,
-        result="success",
-    )
+    # The mutation has landed. Retire the plan FIRST so that a failure in the
+    # audit write below cannot leave an already-applied plan pending: with a
+    # Postgres-backed plan store, an agent retrying the "error" would
+    # otherwise re-execute it (second campaign, second budget update).
     remove_plan(plan.plan_id)
 
-    return {
+    response = {
         "status": "APPLIED",
         "plan_id": plan.plan_id,
         "operation": plan.operation,
         "result": result,
     }
+    try:
+        log_mutation(
+            config.safety.log_file,
+            operation=plan.operation,
+            customer_id=plan.customer_id,
+            entity_type=plan.entity_type,
+            entity_id=plan.entity_id,
+            changes=plan.changes,
+            dry_run=False,
+            result="success",
+        )
+    except Exception as e:  # pragma: no cover - exercised via test double
+        # Never report a landed change as failed. Say the audit row is
+        # missing so it can be reconciled from Google's change history.
+        response["audit_warning"] = (
+            "The change was APPLIED, but writing the audit record failed: "
+            f"{_extract_error_message(e)}. Reconcile from Google Ads change "
+            "history; do NOT re-apply."
+        )
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -2308,6 +2361,28 @@ def _campaign_bidding_strategy(
     if not rows:
         return None
     return rows[0].get("campaign.bidding_strategy_type")
+
+
+def _campaign_current_daily_budget(
+    config: AdLoopConfig, customer_id: str, campaign_id: str
+) -> float | None:
+    """Return the campaign's current daily budget in account currency, or
+    None if the campaign does not exist."""
+    from adloop.ads.gaql import execute_query
+
+    query = f"""
+        SELECT campaign_budget.amount_micros
+        FROM campaign
+        WHERE campaign.id = {campaign_id}
+        LIMIT 1
+    """
+    rows = execute_query(config, customer_id, query)
+    if not rows:
+        return None
+    micros = rows[0].get("campaign_budget.amount_micros")
+    if micros is None:
+        return None
+    return float(micros) / 1_000_000
 
 
 def _existing_negative_geo_exclusions(

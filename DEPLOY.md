@@ -132,7 +132,9 @@ set before real use.
 | `ADLOOP_DB_POOL_MAX` | env (optional) | max pooled conns/instance (default 4) |
 | `ADLOOP_REQUIRE_DRY_RUN` | env (optional) | `false` by default. Set `true` to force every hosted write into dry-run (read-only server). Before this knob existed the hosted server inherited the library default `true` and could never write. |
 | `ADLOOP_TWO_PHASE_APPLY` | env (optional) | `false` by default. Set `true` to require one `dry_run=true` pass per plan before `dry_run=false` is accepted (extra round trip; the dry run does not call Google). |
-| `ADLOOP_MAX_DAILY_BUDGET` | env (optional) | `50` by default, account currency. Over-cap campaign budgets are clamped to this figure with a bolded warning, not rejected. Kept small on purpose so a misused connector token cannot rack up spend. |
+| `ADLOOP_MAX_DAILY_BUDGET` | env (optional) | `50` by default, in the account's currency. New campaigns asked for above it are drafted at the cap with a bolded warning; `update_campaign` refuses to lower a live budget to fit. Scope: it bounds the budget figure the connector itself SETS. It does not bound campaigns that already run above it, bids, `enable_entity`, or N separate creates; the per-user Google token, preview flow, PAUSED-on-create and the audit trail cover those. Non-finite / non-numeric values fall back to 50 with a logged warning. |
+| `ADLOOP_BLOCKED_OPERATIONS` | env (optional) | Comma list of operation names every `draft_*` refuses outright, e.g. `remove_entity,create_pmax_campaign`. Empty by default. |
+| `ADLOOP_REQUIRE_DRY_RUN` / `ADLOOP_TWO_PHASE_APPLY` parsing | | Recognised values: `1/true/yes/on` and `0/false/no/off` (case-insensitive). Any other non-empty value is treated as **true** (the safe direction) and logged once, so a typo locks writes instead of silently unlocking them. |
 | `ADLOOP_DEV_REFRESH_TOKEN` | — | **local-dev only; never set in prod.** Phase E's per-user lookup replaces it. Set it temporarily only for a single-user staging smoke test. |
 
 ## Security

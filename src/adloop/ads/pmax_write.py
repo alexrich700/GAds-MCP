@@ -171,7 +171,9 @@ def draft_pmax_campaign(
     # Over-cap budgets are clamped, not rejected (see clamp_budget_cap).
     # Clamp before validation so downstream checks see the applied figure.
     requested_daily_budget = daily_budget
-    daily_budget, budget_cap_warning = clamp_budget_cap(daily_budget, config.safety)
+    daily_budget, budget_cap_warning = clamp_budget_cap(
+        daily_budget, config.safety, config.source_path
+    )
 
     errors, warnings = _validate_pmax_campaign(
         campaign_name=campaign_name,
@@ -206,16 +208,19 @@ def draft_pmax_campaign(
             "asset_group": asset_group,
         },
     )
+    if budget_cap_warning:
+        # Stored on the plan so the audit row records what was asked for.
+        plan.changes["budget_cap"] = {
+            "requested_daily_budget": requested_daily_budget,
+            "applied_daily_budget": daily_budget,
+            "max_daily_budget": float(config.safety.max_daily_budget),
+        }
     store_plan(plan)
     preview = plan.to_preview()
     if warnings:
         preview["warnings"] = warnings
     if budget_cap_warning:
-        preview["budget_cap"] = {
-            "requested_daily_budget": requested_daily_budget,
-            "applied_daily_budget": daily_budget,
-            "max_daily_budget": float(config.safety.max_daily_budget),
-        }
+        preview["budget_cap"] = plan.changes["budget_cap"]
     return preview
 
 

@@ -235,7 +235,7 @@ AdLoop manages real ad spend, so safety is not optional.
 - **Two-step writes.** Every mutation returns a preview first. A separate `confirm_and_apply` call is required to execute.
 - **Dry-run by default.** Even `confirm_and_apply` defaults to `dry_run=true`. Real changes require explicit `dry_run=false`.
 - **Two-phase apply (optional).** With `safety.two_phase_apply: true`, `confirm_and_apply` refuses `dry_run=false` until the plan has completed one dry-run pass — preview-then-apply becomes server-enforced instead of a convention.
-- **Budget caps.** Configurable maximum daily budget — the server rejects anything above the cap.
+- **Budget caps.** Configurable maximum daily budget per campaign. New campaigns asked for above the cap are drafted *at* the cap with a bolded warning; updates that would have to lower a live budget to fit the cap are refused.
 - **Audit log.** Every operation (including dry runs) is logged to `~/.adloop/audit.log`.
 - **New campaigns and ads are PAUSED.** Nothing goes live without manual enablement.
 - **Destructive ops require double confirmation.** Removing entities or large budget increases trigger extra warnings.

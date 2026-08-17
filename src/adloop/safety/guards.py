@@ -25,26 +25,47 @@ def check_budget_cap(daily_budget: float, config: SafetyConfig) -> None:
         )
 
 
-def clamp_budget_cap(daily_budget: float, config: SafetyConfig) -> tuple[float, str | None]:
+def clamp_budget_cap(
+    daily_budget: float,
+    config: SafetyConfig,
+    config_path: str | None = None,
+) -> tuple[float, str | None]:
     """Clamp ``daily_budget`` to ``config.max_daily_budget``.
 
     Returns ``(applied_budget, warning)``. ``warning`` is ``None`` when the
     request was within the cap. When it was over, ``applied_budget`` is the
     cap and ``warning`` is a bolded, ready-to-show sentence explaining that
-    the plan carries the cap, not the requested figure, and why. The cap is
-    deliberately small: if a connector token is ever misused, the worst case
-    is a paused campaign at the cap, not a runaway budget.
+    the plan carries the cap, not the requested figure, and why.
+
+    ``config_path`` is the config file behind this server, if any (local
+    installs). When given, the remediation tells the user which file holds
+    the cap; when empty (hosted / server mode) it says the operator sets it.
+
+    Scope: this bounds the budget figure the connector itself will SET on a
+    campaign it creates or updates. It does not bound campaigns that already
+    exist above the cap, bids, or other levers; those are governed by the
+    preview flow, PAUSED-on-create and the audit trail.
     """
     cap = float(config.max_daily_budget)
     if daily_budget <= cap:
         return daily_budget, None
+    if config_path:
+        how_to_raise = (
+            f"To allow more, raise safety.max_daily_budget in {config_path} "
+            f"and restart the AdLoop MCP server."
+        )
+    else:
+        how_to_raise = (
+            "Only the server operator can raise the cap; otherwise adjust "
+            "the budget in the Google Ads UI after the campaign is live and "
+            "reviewed."
+        )
     warning = (
         f"**FYI: daily budget set to {cap:.2f}, not the {daily_budget:.2f} you "
-        f"asked for.** This server caps every campaign budget at {cap:.2f}/day "
-        f"(safety.max_daily_budget). The cap is intentional: if this connector "
-        f"is ever used by someone who should not have it, spend stays small "
-        f"and catchable. Raise the budget in the Google Ads UI after the "
-        f"campaign is live and reviewed."
+        f"asked for.** This server caps any campaign budget it sets at "
+        f"{cap:.2f}/day (safety.max_daily_budget). The cap is intentional: if "
+        f"this connector is ever used by someone who should not have it, the "
+        f"budgets it can set stay small and catchable. {how_to_raise}"
     )
     return cap, warning
 

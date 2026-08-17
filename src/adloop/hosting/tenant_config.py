@@ -21,9 +21,13 @@ while keeping the developer token + MCC server-side secrets.
 
 from __future__ import annotations
 
+import logging
+import math
 import os
 
 from adloop.config import AdLoopConfig
+
+log = logging.getLogger("adloop.hosting.tenant_config")
 
 # Hosted safety defaults. Each is overridable by the env var named next to it.
 #
@@ -38,10 +42,18 @@ from adloop.config import AdLoopConfig
 #   value. The draft_* preview already forces the agent to show the change
 #   before applying. Flip on with ADLOOP_TWO_PHASE_APPLY=true if you want the
 #   extra ceremony back.
-# max_daily_budget: 50.00 in account currency. Over-cap budgets are CLAMPED
-#   to this figure (not rejected) with a bolded warning in the preview. Kept
-#   deliberately small: if a connector token is ever misused, the worst case
-#   is a paused campaign at the cap. Raise with ADLOOP_MAX_DAILY_BUDGET.
+# max_daily_budget: 50.00 in account currency. Over-cap budgets on
+#   draft_campaign / draft_pmax_campaign are CLAMPED to this figure (not
+#   rejected) with a bolded warning in the preview; update_campaign clamps
+#   upward to the cap but refuses to lower a live budget. Kept deliberately
+#   small so the budgets a misused connector can SET stay catchable. Scope is
+#   exactly that: it does not bound campaigns that already run above the cap,
+#   bids, enable_entity, or other levers; those rely on the preview flow,
+#   PAUSED-on-create and the per-user audit trail. Raise with
+#   ADLOOP_MAX_DAILY_BUDGET.
+# blocked_operations: empty. ADLOOP_BLOCKED_OPERATIONS is a comma list of
+#   operation names (e.g. "remove_entity,create_pmax_campaign") that every
+#   draft_* refuses outright via check_blocked_operation.
 _DEFAULT_REQUIRE_DRY_RUN = False
 _DEFAULT_TWO_PHASE_APPLY = False
 _DEFAULT_MAX_DAILY_BUDGET = 50.0
@@ -49,29 +61,81 @@ _DEFAULT_MAX_DAILY_BUDGET = 50.0
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
+# Remember which (name, raw) pairs we already warned about so a bad env value
+# logs once per process, not once per request.
+_warned: set[tuple[str, str]] = set()
 
-def _env_bool(name: str, default: bool) -> bool:
-    """Parse a boolean env var; unset/blank/unrecognised -> ``default``."""
-    raw = os.environ.get(name, "").strip().lower()
-    if raw in _TRUE_VALUES:
+
+def _warn_once(name: str, raw: str, message: str) -> None:
+    key = (name, raw)
+    if key in _warned:
+        return
+    _warned.add(key)
+    log.warning(message)
+
+
+def _env_bool(name: str, default: bool, *, unrecognised: bool) -> bool:
+    """Parse a boolean env var.
+
+    unset/blank -> ``default``. Any other value that is not one of the
+    recognised true/false spellings -> ``unrecognised`` (callers pass the
+    SAFE value for the flag, so a typo fails closed) plus a one-time warning.
+    """
+    raw = os.environ.get(name, "")
+    norm = raw.strip().lower()
+    if not norm:
+        return default
+    if norm in _TRUE_VALUES:
         return True
-    if raw in _FALSE_VALUES:
+    if norm in _FALSE_VALUES:
         return False
-    return default
+    _warn_once(
+        name,
+        raw,
+        f"{name}={raw!r} is not a recognised boolean "
+        f"(use one of {sorted(_TRUE_VALUES | _FALSE_VALUES)}); "
+        f"treating as {unrecognised} (the safe value for this flag).",
+    )
+    return unrecognised
 
 
 def _env_float(name: str, default: float) -> float:
-    """Parse a positive float env var; unset/blank/invalid/<=0 -> ``default``."""
-    raw = os.environ.get(name, "").strip()
-    if not raw:
+    """Parse a positive, finite float env var.
+
+    unset/blank -> ``default``. Non-numeric, non-finite (nan/inf), or <= 0
+    -> ``default`` plus a one-time warning. nan is rejected explicitly: it
+    passes ``<= 0`` and would make every clamp comparison false.
+    """
+    raw = os.environ.get(name, "")
+    norm = raw.strip()
+    if not norm:
         return default
     try:
-        value = float(raw)
+        value = float(norm)
     except ValueError:
+        _warn_once(
+            name, raw,
+            f"{name}={raw!r} is not a number; using default {default}.",
+        )
         return default
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
+        _warn_once(
+            name, raw,
+            f"{name}={raw!r} must be a finite number > 0; using default {default}.",
+        )
         return default
     return value
+
+
+def _env_csv(name: str) -> list[str]:
+    """Parse a comma-separated env var into a de-duplicated list, order kept."""
+    raw = os.environ.get(name, "")
+    seen: list[str] = []
+    for part in raw.split(","):
+        item = part.strip()
+        if item and item not in seen:
+            seen.append(item)
+    return seen
 
 
 def build_tenant_config(tenant_id: str) -> AdLoopConfig:
@@ -84,15 +148,20 @@ def build_tenant_config(tenant_id: str) -> AdLoopConfig:
     """
     config = AdLoopConfig()
 
+    # For both flags the SAFE value is True (more gating), so a typo such as
+    # ADLOOP_REQUIRE_DRY_RUN=1.0 locks writes rather than silently unlocking
+    # them. The forced-dry-run response then tells users to contact the
+    # operator, and the one-time log line says what to fix.
     config.safety.require_dry_run = _env_bool(
-        "ADLOOP_REQUIRE_DRY_RUN", _DEFAULT_REQUIRE_DRY_RUN
+        "ADLOOP_REQUIRE_DRY_RUN", _DEFAULT_REQUIRE_DRY_RUN, unrecognised=True
     )
     config.safety.two_phase_apply = _env_bool(
-        "ADLOOP_TWO_PHASE_APPLY", _DEFAULT_TWO_PHASE_APPLY
+        "ADLOOP_TWO_PHASE_APPLY", _DEFAULT_TWO_PHASE_APPLY, unrecognised=True
     )
     config.safety.max_daily_budget = _env_float(
         "ADLOOP_MAX_DAILY_BUDGET", _DEFAULT_MAX_DAILY_BUDGET
     )
+    config.safety.blocked_operations = _env_csv("ADLOOP_BLOCKED_OPERATIONS")
 
     dev_token = os.environ.get("ADLOOP_ADS_DEVELOPER_TOKEN", "").strip()
     mcc = os.environ.get("ADLOOP_ADS_LOGIN_CUSTOMER_ID", "").strip()
