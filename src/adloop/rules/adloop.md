@@ -225,7 +225,7 @@ These tools call both APIs internally and return unified results with computed `
 3. Only call `confirm_and_apply(plan_id=..., dry_run=false)` after explicit user confirmation (a `dry_run=true` pass records a dry run but does not test anything against Google)
 
 **Safety behaviors:**
-- New campaigns, asset groups, and RSAs are created as PAUSED — user must explicitly enable them after review.
+- New campaigns and asset groups are created as PAUSED — user must explicitly enable them after review. New RSAs are created ENABLED; inside a new campaign they cannot serve until the campaign is enabled, and inside a live ad group they start serving once Google approves them, so say that in the preview.
 - `draft_campaign` REQUIRES `geo_target_ids` and `language_ids` — campaigns without targeting waste budget. The tool rejects drafts with missing targeting.
 - `draft_campaign` and `draft_pmax_campaign` clamp any daily budget above `max_daily_budget` down to the cap (the preview carries a bolded `**FYI…**` warning and a `budget_cap` object; the plan applies AT the cap). `update_campaign` raises a below-cap budget up to the cap the same way, but REFUSES when the campaign is already at/above the cap (it never lowers a live budget). `draft_campaign` also rejects BROAD match + non-Smart Bidding and warns if budget is below 5x target CPA.
 - `draft_campaign` rejects `channel_type=PERFORMANCE_MAX` — PMax requires the asset_group + assets + signals to be created in the same mutate as the campaign, which the Search-shaped draft cannot produce. Use `draft_pmax_campaign` for PMax.
@@ -356,7 +356,7 @@ PMax is structurally different from Search — different tools, different diagno
 6. Call `draft_rsa_replacement` with the old `ad_id` and the corrected copy
 7. Present the diff preview (old vs new) to the user — the preview shows both old and new copy side-by-side
 8. Wait for explicit user approval before calling `confirm_and_apply`
-9. The old ad is **permanently removed** by default (so it can't be accidentally re-enabled). The new ad is created as PAUSED.
+9. The old ad is **permanently removed** by default (so it can't be accidentally re-enabled). The new ad is created ENABLED so the ad group keeps a serving ad.
 10. Remind the user to enable the new ad via `enable_entity` after reviewing in Google Ads UI
 11. Only pass `remove_old=false` if the user explicitly wants to keep the old ad around (paused) for reference
 
