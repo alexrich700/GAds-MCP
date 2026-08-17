@@ -1627,11 +1627,7 @@ def update_campaign(
     to change. Geo/language targets are REPLACED entirely (not appended).
     final_url_suffix: set or change the campaign's Final URL suffix. Pass "" to clear.
     """
-    from adloop.safety.guards import (
-        SafetyViolation,
-        check_blocked_operation,
-        clamp_budget_cap,
-    )
+    from adloop.safety.guards import SafetyViolation, check_blocked_operation
     from adloop.safety.preview import ChangePlan, store_plan
 
     try:
@@ -1680,16 +1676,26 @@ def update_campaign(
             #   current >= cap  -> refuse; never lower a live budget.
             #   current <  cap  -> clamp up to the cap and say so in bold.
             current = _campaign_current_daily_budget(config, customer_id, campaign_id)
+            if config.source_path:
+                how_to_raise = (
+                    f"raise safety.max_daily_budget in {config.source_path} and "
+                    f"restart the AdLoop MCP server, or set it in the Google Ads UI"
+                )
+            else:
+                how_to_raise = (
+                    "set it in the Google Ads UI, or ask the server operator to "
+                    "raise the cap"
+                )
             if current is None:
                 errors.append("campaign_id was not found")
             elif current >= cap:
                 errors.append(
                     f"**Not applied: daily budget {daily_budget:.2f} exceeds this "
                     f"server's cap of {cap:.2f}/day (safety.max_daily_budget), and "
-                    f"the campaign is already at {current:.2f}/day.** Applying the "
-                    f"cap would LOWER the live budget, so nothing was changed. "
-                    f"Budgets above the cap have to be set in the Google Ads UI "
-                    f"(or the server operator raises the cap)."
+                    f"the campaign is already at {current:.2f}/day.** This tool "
+                    f"never sets a budget above the cap and will not lower a live "
+                    f"budget to fit it, so nothing was changed. To get "
+                    f"{daily_budget:.2f}/day, {how_to_raise}."
                 )
             else:
                 daily_budget = cap
@@ -1699,9 +1705,8 @@ def update_campaign(
                     f"campaign is currently at {current:.2f}/day. This server caps "
                     f"any campaign budget it sets at {cap:.2f}/day "
                     f"(safety.max_daily_budget); the cap is intentional so a "
-                    f"misused connector cannot rack up spend. Anything above the "
-                    f"cap has to be set in the Google Ads UI (or the server "
-                    f"operator raises the cap)."
+                    f"misused connector cannot rack up spend. To go higher, "
+                    f"{how_to_raise}."
                 )
 
     if geo_target_ids is not None and len(geo_target_ids) == 0:
@@ -2254,18 +2259,25 @@ def confirm_and_apply(
         )
         return {"error": error_message, "plan_id": plan.plan_id}
 
-    # The mutation has landed. Retire the plan FIRST so that a failure in the
-    # audit write below cannot leave an already-applied plan pending: with a
-    # Postgres-backed plan store, an agent retrying the "error" would
-    # otherwise re-execute it (second campaign, second budget update).
-    remove_plan(plan.plan_id)
-
+    # The mutation has landed. From here on the response MUST say APPLIED,
+    # whatever the bookkeeping does: an "error" would invite the agent to
+    # retry, and with a Postgres-backed plan store a retry re-executes the
+    # plan (second campaign, second budget update). Retire the plan first,
+    # then audit, each best-effort with a warning on failure.
     response = {
         "status": "APPLIED",
         "plan_id": plan.plan_id,
         "operation": plan.operation,
         "result": result,
     }
+    try:
+        remove_plan(plan.plan_id)
+    except Exception as e:
+        response["plan_warning"] = (
+            "The change was APPLIED, but the pending plan could not be "
+            f"retired: {_extract_error_message(e)}. Do NOT call "
+            "confirm_and_apply again for this plan_id; it would apply twice."
+        )
     try:
         log_mutation(
             config.safety.log_file,
@@ -2277,7 +2289,7 @@ def confirm_and_apply(
             dry_run=False,
             result="success",
         )
-    except Exception as e:  # pragma: no cover - exercised via test double
+    except Exception as e:
         # Never report a landed change as failed. Say the audit row is
         # missing so it can be reconciled from Google's change history.
         response["audit_warning"] = (

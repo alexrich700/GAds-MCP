@@ -370,7 +370,7 @@ class TestUpdateCampaignBudgetCap:
         detail = " ".join(result["details"])
         assert detail.startswith("**Not applied")
         assert "200.00" in detail and "250.00" in detail and "50.00" in detail
-        assert "LOWER" in detail
+        assert "will not lower a live budget" in detail
         # Nothing was drafted: no plan to accidentally apply.
         assert "plan_id" not in result
 
@@ -2384,6 +2384,30 @@ class TestApplyRetiresPlanBeforeAudit:
         again = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
         assert "No pending plan" in again["error"]
         assert executions == [1]
+
+
+    def test_remove_plan_failure_after_apply_still_reports_applied(self, tmp_path, monkeypatch):
+        config = self._config(tmp_path)
+        plan_id = self._stage_plan()
+        executions = []
+        monkeypatch.setattr(
+            write, "_execute_plan", lambda *_: executions.append(1) or {"ok": True}
+        )
+        def _boom(*_):
+            raise RuntimeError("db down")
+
+        # confirm_and_apply imports remove_plan from adloop.safety.preview at
+        # call time, so patch it at the source.
+        monkeypatch.setattr(preview_store, "remove_plan", _boom)
+
+        result = write.confirm_and_apply(config, plan_id=plan_id, dry_run=False)
+
+        assert result["status"] == "APPLIED"
+        assert "plan_warning" in result
+        assert "apply twice" in result["plan_warning"]
+        assert executions == [1]
+        # Audit still written on the success path.
+        assert '"result": "success"' in (tmp_path / "audit.log").read_text()
 
 
 class TestPlanExpiry:

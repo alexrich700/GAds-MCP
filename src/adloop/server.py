@@ -2972,11 +2972,17 @@ def confirm_and_apply(
     DRY_RUN_REQUIRED until this plan_id has completed one dry_run=true
     pass. Run the dry run, show it to the user, then apply for real.
 
-    Budget cap: draft_campaign / draft_pmax_campaign / update_campaign CLAMP
-    any daily_budget above 'safety.max_daily_budget' (default 50.00) down to
-    the cap and add a bolded warning plus a 'budget_cap' object to the
-    preview. Show that warning to the user verbatim before applying; the
-    plan will apply at the cap, not the requested figure.
+    Budget cap: draft_campaign / draft_pmax_campaign CLAMP any daily_budget
+    above 'safety.max_daily_budget' (default 50.00) to the cap;
+    update_campaign raises a below-cap budget up to the cap or REFUSES when
+    the campaign is already at/above it. Clamped previews carry a bolded
+    warning plus a 'budget_cap' object. Show that warning to the user
+    verbatim before applying; the plan will apply at the cap, not the
+    requested figure.
+
+    On success the response is {"status": "APPLIED", ...}. If it also carries
+    'audit_warning', the change DID land but the audit row could not be
+    written: tell the user, do not re-apply.
 
     The plan_id comes from a prior draft_* or pause/enable tool call.
     """

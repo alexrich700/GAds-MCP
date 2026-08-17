@@ -222,8 +222,7 @@ These tools call both APIs internally and return unified results with computed `
 **Write tool workflow:**
 1. Call a `draft_*` tool → returns a preview with a `plan_id`
 2. Show the full preview to the user and wait for approval
-3. Call `confirm_and_apply(plan_id=..., dry_run=true)` first to test
-4. Only call with `dry_run=false` after explicit user confirmation
+3. Only call `confirm_and_apply(plan_id=..., dry_run=false)` after explicit user confirmation (a `dry_run=true` pass records a dry run but does not test anything against Google)
 
 **Safety behaviors:**
 - New campaigns, asset groups, and RSAs are created as PAUSED — user must explicitly enable them after review.
@@ -412,9 +411,8 @@ PMax is structurally different — there is no `draft_campaign` path for it. PMa
    - **Budget**: ideally ≥ 5x target CPA; the tool warns otherwise.
 4. Call `draft_pmax_campaign` with campaign details + the full `asset_group` dict (name, final_urls, headlines, long_headlines, descriptions, business_name, marketing_image_assets, square_marketing_image_assets, logo_assets, and optionally search_themes / audience_resource_names).
 5. Present the complete preview to the user — emphasize the campaign will be created as PAUSED.
-6. Show the preview to the user and get approval, then call `confirm_and_apply(plan_id=..., dry_run=false)`. (A `dry_run=true` pass does not call Google, so it will not surface API rejections such as invalid asset shapes or missing minimums; those come back as an `error` on the real apply, in which case fix the draft and re-apply.)
-7. After dry run passes and user approves, call `confirm_and_apply(plan_id=..., dry_run=false)`.
-8. Remind the user to enable the PMax campaign via `enable_entity(entity_type='campaign', entity_id=...)` after reviewing in Google Ads UI.
+6. Once the user approves, call `confirm_and_apply(plan_id=..., dry_run=false)`. (A `dry_run=true` pass does not call Google, so it will not surface API rejections such as invalid asset shapes or missing minimums; those come back as an `error` on the real apply, in which case fix the draft and re-apply.)
+7. Remind the user to enable the PMax campaign via `enable_entity(entity_type='campaign', entity_id=...)` after reviewing in Google Ads UI.
 
 ### When user wants to upload images / logos for PMax
 
