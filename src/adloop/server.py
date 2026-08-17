@@ -106,8 +106,9 @@ def _build_orchestration_instructions() -> str:
         "`dry_run=false` after the user explicitly approves the preview. "
         "`require_dry_run` in config can override this.\n"
         "- Respect the config's `max_daily_budget` cap.\n"
-        "- New campaigns and RSAs are created PAUSED. The user must enable "
-        "them after review.\n"
+        "- New campaigns and asset groups are created PAUSED; the user must enable "
+        "them after review. New RSAs are created ENABLED (they only serve once "
+        "their campaign is live).\n"
         "- One change at a time — don't batch unrelated writes.\n\n"
         "PRE-WRITE CHECKS (before any `draft_*`):\n"
         "- BROAD match keywords require Smart Bidding (MAXIMIZE_CONVERSIONS, "
@@ -2465,7 +2466,8 @@ def draft_rsa_replacement(
 
     Provide the ad_id of the RSA to fix, plus the complete corrected copy.
     The tool fetches the old ad's details and shows a side-by-side diff preview.
-    The new ad inherits the ad group from the old one and is created as PAUSED.
+    The new ad inherits the ad group from the old one and is created ENABLED,
+    so the ad group is never left without a serving ad.
     If final_url is omitted, the old ad's URL is reused.
     Call confirm_and_apply with the returned plan_id to execute.
 

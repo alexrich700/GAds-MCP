@@ -237,7 +237,7 @@ AdLoop manages real ad spend, so safety is not optional.
 - **Two-phase apply (optional).** With `safety.two_phase_apply: true`, `confirm_and_apply` refuses `dry_run=false` until the plan has completed one dry-run pass — preview-then-apply becomes server-enforced instead of a convention.
 - **Budget caps.** Configurable maximum daily budget per campaign. New campaigns asked for above the cap are drafted *at* the cap with a bolded warning; updates that would have to lower a live budget to fit the cap are refused.
 - **Audit log.** Every operation (including dry runs) is logged to `~/.adloop/audit.log`.
-- **New campaigns and ads are PAUSED.** Nothing goes live without manual enablement.
+- **New campaigns and asset groups are PAUSED.** Nothing new goes live without manual enablement. New RSAs are created ENABLED so that, once a campaign is turned on (or when adding copy to a live ad group), the ads actually serve.
 - **Destructive ops require double confirmation.** Removing entities or large budget increases trigger extra warnings.
 - **Broad Match + Manual CPC blocked.** The #1 cause of wasted ad spend is automatically prevented — `draft_keywords` refuses to add BROAD match keywords to campaigns without Smart Bidding.
 - **Pre-write validation.** Before any write, the AI checks bidding strategy, conversion tracking status, and quality scores. If the campaign is fundamentally broken, AdLoop warns you instead of making things worse.

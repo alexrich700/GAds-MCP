@@ -3480,8 +3480,13 @@ def _apply_create_rsa(
     ad_group_ad.ad_group = client.get_service("AdGroupService").ad_group_path(
         cid, changes["ad_group_id"]
     )
-    # Create as PAUSED for safety — user can enable separately
-    ad_group_ad.status = client.enums.AdGroupAdStatusEnum.PAUSED
+    # Created ENABLED. Ad copy is meant to run: inside a new (PAUSED) campaign
+    # it cannot serve until the campaign is enabled anyway, and inside a live
+    # ad group the whole point of adding an RSA is for it to serve. Campaigns
+    # and asset groups remain the PAUSED-on-create safety boundary. This same
+    # builder is used by draft_rsa_replacement, where an ENABLED replacement
+    # is required so the ad group is not left with no serving ad.
+    ad_group_ad.status = client.enums.AdGroupAdStatusEnum.ENABLED
 
     ad = ad_group_ad.ad
     ad.final_urls.append(changes["final_url"])

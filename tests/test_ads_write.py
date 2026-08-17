@@ -328,6 +328,56 @@ def test_draft_campaign_still_rejects_nonpositive_budget(config):
     assert any("daily_budget" in d for d in result["details"])
 
 
+class _FakeAdGroupAdService(_FakePathService):
+    def __init__(self):
+        super().__init__("adGroups")
+        self.operations = None
+
+    def mutate_ad_group_ads(self, request: dict) -> object:
+        self.operations = request["operations"]
+        return SimpleNamespace(
+            results=[
+                SimpleNamespace(
+                    resource_name=f"customers/{request['customer_id']}/adGroupAds/1~2"
+                )
+            ]
+        )
+
+
+class TestRsaCreatedEnabled:
+    """RSAs land ENABLED. Campaigns and asset groups stay PAUSED-on-create as
+    the safety boundary; an RSA inside a new campaign cannot serve until the
+    campaign is enabled, and an RSA added to a live ad group is meant to run.
+    draft_rsa_replacement shares this builder, so an ENABLED replacement also
+    guarantees the ad group is never left without a serving ad."""
+
+    def _changes(self):
+        return {
+            "ad_group_id": "2002",
+            "final_url": "https://example.com/",
+            "headlines": [{"text": f"Headline {i}"} for i in range(3)],
+            "descriptions": [{"text": f"Description {i}"} for i in range(2)],
+            "path1": "",
+            "path2": "",
+        }
+
+    def test_apply_create_rsa_sets_enabled(self):
+        service = _FakeAdGroupAdService()
+        client = _FakeClient({"AdGroupAdService": service, "AdGroupService": _FakeAdGroupService()})
+
+        result = write._apply_create_rsa(client, "1234567890", self._changes())
+
+        assert result["resource_name"].endswith("adGroupAds/1~2")
+        op = service.operations[0]
+        assert op.create.status == client.enums.AdGroupAdStatusEnum.ENABLED
+        assert op.create.status != client.enums.AdGroupAdStatusEnum.PAUSED
+
+    def test_campaign_still_created_paused(self):
+        """Guard the other half of the rule: campaigns stay PAUSED."""
+        src = open(write.__file__).read()
+        assert "campaign.status = client.enums.CampaignStatusEnum.PAUSED" in src
+
+
 class TestUpdateCampaignBudgetCap:
     """An over-cap UPDATE must never lower a live budget. The tool looks at
     the campaign's current budget (only when the request is over the cap):
