@@ -83,13 +83,15 @@ def _prepare_server():
     """
     _configure_server_runtime()
     from adloop.hosting.auth import install_auth
+    from adloop.hosting.call_log import install_call_log
     from adloop.hosting.datastore import install_datastore
     from adloop.hosting.shared_credentials import install_shared_credentials_provider
     from adloop.hosting.shared_token_lookup import build_shared_token_lookup
     from adloop.hosting.token_lookup import build_supabase_token_lookup
     from adloop.server import mcp
 
-    install_auth(mcp)  # Supabase auth + tenant middleware (if configured)
+    if install_auth(mcp):  # Supabase auth + tenant middleware (if configured)
+        install_call_log(mcp)  # one mcp_tool_calls row per call (if a DB is configured)
     # GA4/GTM/GSC run off the shared reporting@ token (one per service); Ads
     # stays per-user. With a DB configured, the real Supabase lookups are used;
     # otherwise the env-var dev fallbacks apply (local dev only).
